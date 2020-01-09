@@ -1,0 +1,131 @@
+diff -Naur libreswan-3.15-orig/programs/pluto/ikev1_main.c libreswan-3.15/programs/pluto/ikev1_main.c
+--- libreswan-3.15-orig/programs/pluto/ikev1_main.c	2016-11-23 15:02:08.237406461 -0500
++++ libreswan-3.15/programs/pluto/ikev1_main.c	2016-11-23 15:04:21.327555563 -0500
+@@ -3046,15 +3046,12 @@
+ 								mononow())));
+ 					} else {
+ 						loglog(RC_LOG_SERIOUS,
+-							"received Delete SA payload: replace IPSEC State #%lu in %d seconds",
+-							dst->st_serialno,
+-							DELETE_SA_DELAY);
+-						dst->st_margin = deltatime(
+-							DELETE_SA_DELAY);
++							"received Delete SA payload: replace IPSEC State #%lu now",
++							dst->st_serialno);
++						dst->st_margin = deltatime(0);
+ 						delete_event(dst);
+-						event_schedule(
+-							EVENT_SA_REPLACE,
+-							DELETE_SA_DELAY, dst);
++						event_schedule(EVENT_SA_REPLACE,
++								0, dst);
+ 					}
+ 				} else {
+ 					loglog(RC_LOG_SERIOUS,
+diff -Naur libreswan-3.15-orig/programs/pluto/ikev2_parent.c libreswan-3.15/programs/pluto/ikev2_parent.c
+--- libreswan-3.15-orig/programs/pluto/ikev2_parent.c	2016-11-23 15:02:08.233406486 -0500
++++ libreswan-3.15/programs/pluto/ikev2_parent.c	2016-11-23 15:06:36.495691380 -0500
+@@ -3918,6 +3918,44 @@
+ 	return STF_OK;
+ }
+ 
++static void delete_or_replace_state(struct state *st) {
++	struct connection *c = st->st_connection;
++
++	if (st->st_event == NULL) { /* this could be an assert/except? */
++		loglog(RC_LOG_SERIOUS, "received Delete SA payload: delete IPSEC State #%lu. st_event == NULL",
++				st->st_serialno);
++		delete_state(st);
++		return;
++	}
++
++	if (st->st_event->ev_type == EVENT_SA_EXPIRE) {
++		/* this state  was going to  EXPIRE just let it now*/
++		delete_event(st);
++		event_schedule(EVENT_SA_EXPIRE, 0, st);
++		loglog(RC_LOG_SERIOUS, "received Delete SA payload: expire IPSEC State #%lu now",
++				st->st_serialno);
++		return;
++	}
++
++	if ((c->newest_ipsec_sa == st->st_serialno && (c->policy & POLICY_UP))
++		&& ((st->st_event->ev_type == EVENT_SA_REPLACE) ||
++		    (st->st_event->ev_type == EVENT_v2_SA_REPLACE_IF_USED))) {
++		/*
++		 * Last IPsec SA for a permanent  connection that we have initiated.
++		 * Replace it now.  Useful if the other peer is rebooting.
++		 */
++		loglog(RC_LOG_SERIOUS, "received Delete SA payload: replace IPSEC State #%lu now",
++				st->st_serialno);
++		delete_event(st);
++		st->st_margin = deltatime(0);
++		event_schedule(EVENT_SA_REPLACE, 0, st);
++	} else {
++		loglog(RC_LOG_SERIOUS, "received Delete SA payload: delete IPSEC State #%lu now",
++				st->st_serialno);
++		delete_state(st);
++	}
++}
++
+ stf_status process_encrypted_informational_ikev2(struct msg_digest *md)
+ {
+ 	struct state *st = md->st;
+@@ -4353,10 +4391,7 @@
+ 								ntohl((uint32_t)spi)));
+ 
+ 						passert(dst != st);	/* st is a parent */
+-						/* now delete the state */
+-						change_state(dst,
+-							STATE_CHILDSA_DEL);
+-						delete_state(dst);
++						delete_or_replace_state(dst);
+ 						/* note: md->st != dst */
+ 					} else {
+ 						libreswan_log(
+diff -Naur libreswan-3.15-orig/programs/pluto/state.c libreswan-3.15/programs/pluto/state.c
+--- libreswan-3.15-orig/programs/pluto/state.c	2016-11-23 15:02:08.250406378 -0500
++++ libreswan-3.15/programs/pluto/state.c	2016-11-23 15:04:21.328555557 -0500
+@@ -665,6 +665,33 @@
+ 	release_v2fragments(st);
+ }
+ 
++void flush_pending_quickmode (struct state *pst);
++void flush_pending_quickmode (struct state *pst)
++{
++        struct state *st;
++
++	if (!IS_IKE_SA(pst))
++		return; /* we had better be a parent */
++	if(pst->st_ikev2)
++		return; /* quick mode is only for IKEv1 */
++
++        FOR_EACH_HASH_ENTRY(st, pst->st_icookie, pst->st_rcookie, {
++                if (st->st_clonedfrom == pst->st_serialno) {
++			char cib[CONN_INST_BUF];
++			struct connection *c = st->st_connection;
++			if (IS_IPSEC_SA_ESTABLISHED(st->st_state))
++				continue;
++
++			loglog(RC_LOG_SERIOUS, "reschedule pending Phase 2 of "
++					"connection\"%s\"%s state #%lu: - the parent is going away",
++					c->name, fmt_conn_instance(c, cib),
++					st->st_serialno);
++
++			delete_event(st);
++			event_schedule( EVENT_SA_REPLACE, 0, st);
++               }
++        });
++}
+ /* delete a state object */
+ void delete_state(struct state *st)
+ {
+@@ -815,6 +842,9 @@
+ 	 */
+ 	flush_pending_by_state(st);
+ 
++	/* handle pending quick mode IKEv1 states */
++	flush_pending_quickmode(st);
++
+ 	/*
+ 	 * if there is anything in the cryptographic queue, then remove this
+ 	 * state from it.

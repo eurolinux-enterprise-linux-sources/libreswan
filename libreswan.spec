@@ -20,7 +20,7 @@
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
 Version: 3.15
-Release: %{?prever:0.}5.3%{?prever:.%{prever}}%{?dist}
+Release: %{?prever:0.}7.3%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Group: System Environment/Daemons
 Url: https://libreswan.org/
@@ -44,9 +44,21 @@ Patch12: libreswan-3.15-609343.patch
 Patch13: libreswan-3.15-1271778-whack-man.patch
 # rhbz#1272317
 Patch14: libreswan-3.15-1271811-fipsfiles.patch
-# disabled to keep in sync with RHEL-7.1
-#Patch15: libreswan-3.15-1289498-keyingtries.patch
+Patch15: libreswan-3.15-1289498-keyingtries.patch
 Patch16: libreswan-3.15-1144462-status.patch
+Patch17: libreswan-3.16-1311360-sharedike.patch
+# rhbz#1360134
+Patch18: libreswan-3.15-1347735-multicrl.patch
+Patch19: libreswan-3.15-1313709-man-rcode.patch
+Patch20: libreswan-3.15-1315415-man-crl-strict.patch
+# rhbz#1375741
+Patch21: libreswan-3.15-1361721-delete.patch
+Patch22: libreswan-3.18-1375741-avoid_dup_shunt.patch
+# rhbz#1335896
+Patch23: libreswan-3.15-1290907-configdir.patch
+Patch24: libreswan-3.18-1313843-initwarn.patch
+Patch25: libreswan-3.18-1369990-delete-init.patch
+Patch26: libreswan-3.15-1403201-memleak-backports.patch
 
 Requires: iproute >= 2.6.8 nss-tools nss-softokn
 
@@ -136,8 +148,18 @@ Libreswan is based on Openswan-2.6.38 which in turn is based on FreeS/WAN-2.04
 %patch12 -p1
 %patch13 -p1
 %patch14 -p1
-#patch15 -p1
+%patch15 -p1
 %patch16 -p1
+%patch17 -p1
+%patch18 -p1
+%patch19 -p1
+%patch20 -p1
+%patch21 -p1
+%patch22 -p1
+%patch23 -p1
+%patch24 -p1
+%patch25 -p1
+%patch26 -p1
 
 %build
 %if %{buildefence}
@@ -176,6 +198,7 @@ make %{?_smp_mflags} \
   MANTREE=%{_mandir} \
   INC_RCDEFAULT=%{_initrddir} \
   MODPROBE="modprobe -q -b" \
+  WERROR_CFLAGS="" \
   programs
 FS=$(pwd)
 
@@ -280,8 +303,9 @@ fi
 
 %postun
 if [ $1 -ge 1 ] ; then
-     /sbin/service ipsec condrestart 2>&1 >/dev/null || :
+     /sbin/service ipsec condrestart >/dev/null 2>&1 || :
 fi
+
 %else
 %preun
 %systemd_preun ipsec.service
@@ -292,6 +316,27 @@ fi
 %post
 %systemd_post ipsec.service
 %endif
+
+# handling for rhbz#1345959 openswan to libreswan migration
+%triggerun -- openswan < %{version}-%{release}
+/sbin/chkconfig ipsec >/dev/null 2>&1 && \
+    touch %{_localstatedir}/lock/subsys/ipsec.enabled || :
+/sbin/service ipsec status >/dev/null 2>&1 && \
+    touch %{_localstatedir}/lock/subsys/ipsec.started || :
+for conf in $(ls %{_sysconfdir}/ipsec.conf %{_sysconfdir}/ipsec.d/*.conf 2>/dev/null); do
+    grep -q 'ike=.*!$' ${conf} && sed -i.rpmorig -e '/ike=/ s/\!$//' ${conf} || :
+done
+
+%triggerpostun -- openswan < %{version}-%{release}
+/sbin/chkconfig --add ipsec
+if [ -f %{_localstatedir}/lock/subsys/ipsec.enabled ]; then
+    /sbin/chkconfig ipsec on
+    rm -f %{_localstatedir}/lock/subsys/ipsec.enabled
+fi
+if [ -f %{_localstatedir}/lock/subsys/ipsec.started ]; then
+    /sbin/service ipsec restart >/dev/null 2>&1
+    rm -f %{_localstatedir}/lock/subsys/ipsec.started
+fi
 
 %files
 %doc CHANGES COPYING CREDITS README* LICENSE
@@ -331,8 +376,30 @@ fi
 %endif
 
 %changelog
+* Sun Jan 15 2017 Paul Wouters <pwouters@redhat.com> - 3.15-7.3
+- Resolves: rhbz#1403201 pluto uses up available memory and fails with 'unable to popen'
+- Resolves: rhbz#1311360 When IKE rekeys [...] (updated for IKEv1 responder side)
+
+* Mon Nov 21 2016 Paul Wouters <pwouters@redhat.com> - 3.15-7.2
+- Resolves: rhbz#1313843 Prescript warning: Missing control file /var/run/pluto/pluto.ctl
+- Resolves: rhbz#1375741 Pluto (libreswan) intermittent abort [extended patch]
+- Resolves: rhbz#1369990 Libreswan connection sometimes does not get re-established after one side restarts
+
+* Thu Nov 03 2016 Paul Wouters <pwouters@redhat.com> - 3.15-7.1
+- Resolves: rhbz#1375741 Pluto (libreswan) intermittent abort when ' auto --up --asynchronous' is used
+- Resolves: rhbz#1335896 ipsec initnss/checknss custom directory not recognized
+
+* Wed Aug 24 2016 Paul Wouters <pwouters@redhat.com> - 3.15-7
+- Resolves: rhbz#1313843 Prescript warning: Missing control file /var/run/pluto/pluto.ctl
+
+* Wed Aug 24 2016 Paul Wouters <pwouters@redhat.com> - 3.15-6
+- Resolves: rhbz#1345959 openswan - libreswan migration issues
+- Resolves: rhbz#1360134 libreswan needs to check additional CRLs after LDAP CRL distributionpoint fails
+- Resolves: rhbz#1313709 ipsec pluto returns zero even if it fails [doc change only]
+- Resolves: rhbz#1315415 ipsec.conf manpage does not contain any mention about crl-strict option
+
 * Mon Mar 07 2016 Paul Wouters <pwouters@redhat.com> - 3.15-5.3
-- Resolves: rhbz#1289498 keyingtries=0 is broken [revert]
+- Resolves: rhbz#1311360 When IKE rekeys, if on a different tunnel [...]
 
 * Sat Jan 23 2016 Paul Wouters <pwouters@redhat.com> - 3.15-5.2
 - Resolves: rhbz#1289498 keyingtries=0 is broken

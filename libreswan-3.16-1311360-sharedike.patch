@@ -1,0 +1,126 @@
+diff -Naur libreswan-3.15-old/programs/pluto/connections.c libreswan-3.15/programs/pluto/connections.c
+--- libreswan-3.15-old/programs/pluto/connections.c	2017-01-15 12:29:17.583937822 -0500
++++ libreswan-3.15/programs/pluto/connections.c	2017-01-15 12:30:31.720639094 -0500
+@@ -2498,6 +2498,8 @@
+ 	struct connection *c,
+ 	lset_t req_policy, lset_t policy_exact_mask)
+ {
++	struct connection *candidate = NULL;
++
+ 	DBG(DBG_CONTROLMORE,
+ 		DBG_log("find_next_host_connection policy=%s",
+ 			bitnamesof(sa_policy_bit_names, req_policy)));
+@@ -2547,10 +2549,22 @@
+ 		 * Success if all specified policy bits are in candidate's policy.
+ 		 * It works even when the exact-match bits are included.
+ 		 */
+-		if ((req_policy & ~c->policy) == LEMPTY)
+-			break;
++		if ((req_policy & ~c->policy) == LEMPTY) {
++			if (c->newest_isakmp_sa != SOS_NOBODY) {
++				break;
++			} else {
++				/*
++				 * We prefer connections with an IKE SA.
++				 * so remember this, but keep looking
++				 */
++				candidate = c;
++			}
++		}
+ 	}
+ 
++	if (c == NULL && candidate != NULL)
++		c = candidate;
++
+ 	DBG(DBG_CONTROLMORE,
+ 		DBG_log("find_next_host_connection returns %s",
+ 			c ? c->name : "empty"));
+diff -Naur libreswan-3.15-old/programs/pluto/ikev1_main.c libreswan-3.15/programs/pluto/ikev1_main.c
+--- libreswan-3.15-old/programs/pluto/ikev1_main.c	2017-01-15 12:29:17.580937844 -0500
++++ libreswan-3.15/programs/pluto/ikev1_main.c	2017-01-15 12:30:51.390504321 -0500
+@@ -3068,8 +3068,10 @@
+ 
+ 				if (rc->newest_ipsec_sa == SOS_NOBODY) {
+ 					rc->policy &= ~POLICY_UP;
+-					flush_pending_by_connection(rc);
+-					delete_states_by_connection(rc, FALSE);
++					if (!shared_phase1_connection(rc)) {
++						flush_pending_by_connection(rc);
++						delete_states_by_connection(rc, FALSE);
++					}
+ 					reset_cur_connection();
+ 				}
+ 				/* reset connection */
+diff -Naur libreswan-3.15-old/programs/pluto/state.c libreswan-3.15/programs/pluto/state.c
+--- libreswan-3.15-old/programs/pluto/state.c	2017-01-15 12:29:17.580937844 -0500
++++ libreswan-3.15/programs/pluto/state.c	2017-01-15 12:30:31.720639094 -0500
+@@ -939,6 +939,28 @@
+ 	return FALSE;
+ }
+ 
++bool shared_phase1_connection(const struct connection *c)
++{
++	int i;
++
++	so_serial_t serial_us = c->newest_isakmp_sa;
++
++	if (serial_us == SOS_NOBODY)
++		return FALSE;
++
++	for (i = 0; i < STATE_TABLE_SIZE; i++) {
++		struct state *st;
++
++		FOR_EACH_ENTRY(st, i, {
++			if (st->st_connection == c)
++				continue;
++			if (st->st_clonedfrom == serial_us)
++				return TRUE;
++		});
++	}
++	return FALSE;
++}
++
+ /*
+  * delete all states that were created for a given connection,
+  * additionally delete any states for which func(st, c)
+@@ -1108,8 +1130,9 @@
+ {
+ 	if (IS_ISAKMP_SA_ESTABLISHED(this->st_state))
+ 		return FALSE;
+-	else
++	if (c->kind == CK_INSTANCE)
+ 		return same_phase1_sa_relations(this, c);
++	return FALSE;
+ }
+ 
+ void delete_p2states_by_connection(struct connection *c)
+diff -Naur libreswan-3.15-old/programs/pluto/state.h libreswan-3.15/programs/pluto/state.h
+--- libreswan-3.15-old/programs/pluto/state.h	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/state.h	2017-01-15 12:30:31.720639094 -0500
+@@ -587,6 +587,7 @@
+ extern bool require_ddos_cookies(void);
+ extern void show_globalstate_status(void);
+ extern void log_newest_sa_change(char *f, struct state *const st);
++bool shared_phase1_connection(const struct connection *c);
+ 
+ #ifdef XAUTH_HAVE_PAM
+ void ikev2_free_auth_pam(so_serial_t st_serialno);
+diff -Naur libreswan-3.15-old/programs/pluto/terminate.c libreswan-3.15/programs/pluto/terminate.c
+--- libreswan-3.15-old/programs/pluto/terminate.c	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/terminate.c	2017-01-15 12:30:31.720639094 -0500
+@@ -75,7 +75,14 @@
+ 	libreswan_log("terminating SAs using this connection");
+ 	c->policy &= ~POLICY_UP;
+ 	flush_pending_by_connection(c);
+-	delete_states_by_connection(c, FALSE);
++	if (shared_phase1_connection(c)) {
++		libreswan_log("IKE SA is shared - only terminating IPsec SA");
++		delete_state(state_with_serialno(c->newest_ipsec_sa));
++	} else {
++		DBG(DBG_CONTROL, DBG_log("connection not shared pkilling phase1 and phase2"));
++		delete_states_by_connection(c, FALSE);
++	}
++
+ 	reset_cur_connection();
+ 
+ 	return 1;

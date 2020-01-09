@@ -1,0 +1,13 @@
+diff -Naur libreswan-3.15-orig/programs/pluto/terminate.c libreswan-3.15/programs/pluto/terminate.c
+--- libreswan-3.15-orig/programs/pluto/terminate.c	2016-08-04 15:09:06.209395270 -0400
++++ libreswan-3.15/programs/pluto/terminate.c	2016-08-04 15:10:20.865167198 -0400
+@@ -77,7 +77,8 @@
+ 	flush_pending_by_connection(c);
+ 	if (shared_phase1_connection(c)) {
+ 		libreswan_log("IKE SA is shared - only terminating IPsec SA");
+-		delete_state(state_with_serialno(c->newest_ipsec_sa));
++		if (c->newest_ipsec_sa != SOS_NOBODY)
++			delete_state(state_with_serialno(c->newest_ipsec_sa));
+ 	} else {
+ 		DBG(DBG_CONTROL, DBG_log("connection not shared pkilling phase1 and phase2"));
+ 		delete_states_by_connection(c, FALSE);

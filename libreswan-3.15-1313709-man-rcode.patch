@@ -1,0 +1,18 @@
+diff -Naur libreswan-3.15-orig/programs/ipsec/ipsec.8.xml libreswan-3.15/programs/ipsec/ipsec.8.xml
+--- libreswan-3.15-orig/programs/ipsec/ipsec.8.xml	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/ipsec/ipsec.8.xml	2016-08-23 22:28:20.610264615 -0400
+@@ -90,6 +90,14 @@
+ 
+ </refsect1>
+ 
++<refsect1 id='returncode'><title>RETURN CODE</title>
++<para>The ipsec command passes the return code of the sub-command
++back to the caller. The only exception is when <userinput>ipsec pluto</userinput>
++is used without --nofork, as it will fork into the background
++and the ipsec command returns success while the pluto daemon
++may in fact exit with an error code after the fork. </para>
++</refsect1>
++
+ <refsect1 id='files'><title>FILES</title>
+ <para>/usr/local/libexec/ipsec	usual utilities directory</para>
+ </refsect1>

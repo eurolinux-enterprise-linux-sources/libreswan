@@ -1,0 +1,52 @@
+diff -Naur libreswan-3.15-orig/programs/configs/d.ipsec.conf/crl-strict.xml libreswan-3.15/programs/configs/d.ipsec.conf/crl-strict.xml
+--- libreswan-3.15-orig/programs/configs/d.ipsec.conf/crl-strict.xml	1969-12-31 19:00:00.000000000 -0500
++++ libreswan-3.15/programs/configs/d.ipsec.conf/crl-strict.xml	2016-08-23 22:50:16.721443109 -0400
+@@ -0,0 +1,15 @@
++  <varlistentry>
++  <term><emphasis remap='B'>crl-strict</emphasis></term>
++  <listitem>
++<para>if not set, pluto is tolerant about missing or expired X.509 Certificate
++Revocation Lists (CRL's), and will allow peer certificates as long as they
++do not appear on an expired CRL. When this option is enabled, all connections
++with an expired or missing CRL will be denied. Active connections will be
++terminated at rekey time. This setup is more secure, but vulnerable to downtime
++if the CRL expires. Acceptable values are <emphasis remap='B'>yes</emphasis>
++or <emphasis remap='B'>no</emphasis> (the default). This option used to be
++called strictcrlpolicy.
++</para>
++  </listitem>
++  </varlistentry>
++
+diff -Naur libreswan-3.15-orig/programs/configs/d.ipsec.conf/order.txt libreswan-3.15/programs/configs/d.ipsec.conf/order.txt
+--- libreswan-3.15-orig/programs/configs/d.ipsec.conf/order.txt	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/configs/d.ipsec.conf/order.txt	2016-08-23 22:50:43.335276683 -0400
+@@ -100,7 +100,7 @@
+ d.ipsec.conf/secctx-attr-type.xml
+ d.ipsec.conf/plutofork.xml
+ d.ipsec.conf/crlcheckinterval.xml
+-d.ipsec.conf/strictcrlpolicy.xml
++d.ipsec.conf/crl-strict.xml
+ d.ipsec.conf/ocsp-global.xml
+ d.ipsec.conf/forwardcontrol.xml
+ d.ipsec.conf/rp_filter.xml
+diff -Naur libreswan-3.15-orig/programs/configs/d.ipsec.conf/strictcrlpolicy.xml libreswan-3.15/programs/configs/d.ipsec.conf/strictcrlpolicy.xml
+--- libreswan-3.15-orig/programs/configs/d.ipsec.conf/strictcrlpolicy.xml	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/configs/d.ipsec.conf/strictcrlpolicy.xml	1969-12-31 19:00:00.000000000 -0500
+@@ -1,17 +0,0 @@
+-  <varlistentry>
+-  <term><emphasis remap='B'>strictcrlpolicy</emphasis></term>
+-  <listitem>
+-<para>if not set, pluto is tolerant about missing or expired X.509 Certificate
+-Revocation Lists (CRL's), and will allow peer certificates as long as they
+-do not appear on an expired CRL. When this option is enabled, all connections
+-with an expired or missing CRL will be denied. Active connections will be
+-terminated at rekey time. This setup is more secure, but also dangerous. If
+-the CRL is fetched through an IPsec tunnel with a CRL that expired, the
+-entire VPN server will be dead in the water until a new CRL is manually
+-transferred to the machine (if it allows non-IPsec connections).
+-Acceptable values are <emphasis remap='B'>yes</emphasis> or <emphasis remap='B'>no</emphasis>
+-(the default).
+-</para>
+-  </listitem>
+-  </varlistentry>
+-

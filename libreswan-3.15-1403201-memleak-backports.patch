@@ -1,0 +1,529 @@
+diff -Naur libreswan-3.15-orig/include/x509.h libreswan-3.15/include/x509.h
+--- libreswan-3.15-orig/include/x509.h	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/include/x509.h	2016-12-15 13:16:17.780861838 -0500
+@@ -89,8 +89,6 @@
+ extern chunk_t get_dercert_from_nss_cert(CERTCertificate *cert);
+ extern void convert_nss_gn_to_pluto_gn(CERTGeneralName *nss_gn,
+ 				       generalName_t *pluto_gn);
+-extern void get_pluto_gn_from_nss_cert(CERTCertificate *cert,
+-					generalName_t **gn_out);
+ extern realtime_t get_nss_cert_notafter(CERTCertificate *cert);
+ extern struct pubkey *allocate_RSA_public_key_nss(CERTCertificate *cert);
+ extern generalName_t *gndp_from_nss_cert(CERTCertificate *cert);
+diff -Naur libreswan-3.15-orig/lib/libswan/id.c libreswan-3.15/lib/libswan/id.c
+--- libreswan-3.15-orig/lib/libswan/id.c	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/lib/libswan/id.c	2016-12-15 13:16:17.780861838 -0500
+@@ -583,6 +583,10 @@
+ 						SECITEM_FreeItem(val_b, PR_TRUE);
+ 					break;
+ 				}
++				if (val_b != NULL) {
++					/* XXX Can CERT_DecodeAVAValue() return NULL? No man page :( */
++					SECITEM_FreeItem(val_b, PR_TRUE);
++				}
+ 			}
+ 		}
+ 	}
+diff -Naur libreswan-3.15-orig/programs/pluto/connections.c libreswan-3.15/programs/pluto/connections.c
+--- libreswan-3.15-orig/programs/pluto/connections.c	2016-12-14 19:40:13.146578425 -0500
++++ libreswan-3.15/programs/pluto/connections.c	2016-12-15 13:16:17.780861838 -0500
+@@ -318,8 +318,6 @@
+ 		sr = sr->next;
+ 	}
+ 
+-	free_generalNames(c->requested_ca, TRUE);
+-
+ 	if ((c->policy & POLICY_AUTH_NULL) == LEMPTY)
+ 		gw_delref(&c->gw_info);
+ 
+@@ -2665,6 +2663,7 @@
+ 		peer_pathlen = 0,
+ 		best_peer_pathlen = 0;
+ 	const chunk_t *psk = NULL;
++	generalName_t *requested_ca = st->st_requested_ca;
+ 
+ 	*fromcert = FALSE;
+ 
+@@ -2684,7 +2683,7 @@
+ 		peer_ca.ptr != NULL &&
+ 		trusted_ca_nss(peer_ca, c->spd.that.ca, &peer_pathlen) &&
+ 		peer_pathlen == 0 &&
+-		match_requested_ca(c->requested_ca, c->spd.this.ca,
++		match_requested_ca(requested_ca, c->spd.this.ca,
+ 				&our_pathlen) &&
+ 		our_pathlen == 0) {
+ 
+@@ -2748,7 +2747,7 @@
+ 					&wildcards);
+ 			bool match2 = trusted_ca_nss(peer_ca, d->spd.that.ca,
+ 						&peer_pathlen);
+-			bool match3 = match_requested_ca(c->requested_ca,
++			bool match3 = match_requested_ca(requested_ca,
+ 							d->spd.this.ca,
+ 							&our_pathlen);
+ 
+diff -Naur libreswan-3.15-orig/programs/pluto/connections.h libreswan-3.15/programs/pluto/connections.h
+--- libreswan-3.15-orig/programs/pluto/connections.h	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/connections.h	2016-12-15 13:16:17.781861874 -0500
+@@ -278,7 +278,6 @@
+ 
+ 	struct connection *ac_next;	/* all connections list link */
+ 
+-	generalName_t *requested_ca;	/* collected certificate requests */
+ 	enum send_ca_policy send_ca;
+ #ifdef XAUTH_HAVE_PAM
+ 	pam_handle_t *pamh;		/*  PAM handle for that connection  */
+diff -Naur libreswan-3.15-orig/programs/pluto/ikev1_aggr.c libreswan-3.15/programs/pluto/ikev1_aggr.c
+--- libreswan-3.15-orig/programs/pluto/ikev1_aggr.c	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/ikev1_aggr.c	2016-12-15 13:16:17.781861874 -0500
+@@ -448,7 +448,7 @@
+ 		return STF_FAIL + INVALID_KEY_INFORMATION;
+ 
+ 	/* decode certificate requests */
+-	ikev1_decode_cr(md, &requested_ca);
++	ikev1_decode_cr(md);
+ 
+ 	if (requested_ca != NULL)
+ 		st->hidden_variables.st_got_certrequest = TRUE;
+@@ -479,12 +479,6 @@
+ 	    DBG_log(" I am %ssending a certificate request",
+ 		    send_cr ? "" : "not "));
+ 
+-	/*
+-	 * free collected certificate requests since as initiator
+-	 * we don't heed them anyway
+-	 */
+-	free_generalNames(requested_ca, TRUE);
+-
+ 	/* done parsing; initialize crypto  */
+ 
+ 	init_out_pbs(&reply_stream, reply_buffer, sizeof(reply_buffer),
+diff -Naur libreswan-3.15-orig/programs/pluto/ikev1.c libreswan-3.15/programs/pluto/ikev1.c
+--- libreswan-3.15-orig/programs/pluto/ikev1.c	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/ikev1.c	2016-12-15 13:16:17.781861874 -0500
+@@ -2836,7 +2836,7 @@
+ 			auth_policy |=  POLICY_AGGRESSIVE;
+ 
+ 		/* check for certificate requests */
+-		ikev1_decode_cr(md, &c->requested_ca);
++		ikev1_decode_cr(md);
+ 
+ 		if ((auth_policy & ~POLICY_AGGRESSIVE) != LEMPTY) {
+ 			r = refine_host_connection(st, &peer, initiator, auth_policy, &fromcert);
+diff -Naur libreswan-3.15-orig/programs/pluto/ikev1_main.c libreswan-3.15/programs/pluto/ikev1_main.c
+--- libreswan-3.15-orig/programs/pluto/ikev1_main.c	2016-12-14 19:40:13.158578848 -0500
++++ libreswan-3.15/programs/pluto/ikev1_main.c	2016-12-15 13:16:17.782861910 -0500
+@@ -1161,9 +1161,9 @@
+ 	RETURN_STF_FAILURE(accept_v1_nonce(md, &st->st_ni, "Ni"));
+ 
+ 	/* decode certificate requests */
+-	ikev1_decode_cr(md, &st->st_connection->requested_ca);
++	ikev1_decode_cr(md);
+ 
+-	if (st->st_connection->requested_ca != NULL)
++	if (st->st_requested_ca != NULL)
+ 		st->hidden_variables.st_got_certrequest = TRUE;
+ 
+ 	ikev1_natd_init(st, md);
+@@ -1465,7 +1465,7 @@
+ 		return STF_FAIL + INVALID_KEY_INFORMATION;
+ 
+ 	/* decode certificate requests */
+-	ikev1_decode_cr(md, &requested_ca);
++	ikev1_decode_cr(md);
+ 
+ 	if (requested_ca != NULL)
+ 		st->hidden_variables.st_got_certrequest = TRUE;
+@@ -1515,13 +1515,6 @@
+ 			send_cr ? "" : "not "));
+ 
+ 	/*
+-	 * free collected certificate requests
+-	 * note: when we are able to ship based on the request
+-	 * contents, we'll need them then.
+-	 */
+-	free_generalNames(requested_ca, TRUE);
+-
+-	/*
+ 	 * Determine if we need to send INITIAL_CONTACT payload
+ 	 *
+ 	 * We are INITIATOR in I2, this is not a Quick Mode rekey, so if
+diff -Naur libreswan-3.15-orig/programs/pluto/ikev2.c libreswan-3.15/programs/pluto/ikev2.c
+--- libreswan-3.15-orig/programs/pluto/ikev2.c	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/ikev2.c	2016-12-15 13:16:17.782861910 -0500
+@@ -1120,7 +1120,7 @@
+ 		return FALSE;
+ 
+ 	/* check for certificate requests */
+-	ikev2_decode_cr(md, &c->requested_ca);
++	ikev2_decode_cr(md);
+ 
+ 	/*
+ 	 * Now that we've decoded the ID payload, let's see if we
+diff -Naur libreswan-3.15-orig/programs/pluto/ikev2_parent.c libreswan-3.15/programs/pluto/ikev2_parent.c
+--- libreswan-3.15-orig/programs/pluto/ikev2_parent.c	2016-12-14 19:40:13.159578884 -0500
++++ libreswan-3.15/programs/pluto/ikev2_parent.c	2016-12-15 13:16:17.783861946 -0500
+@@ -2773,7 +2773,7 @@
+ 	if (md->chain[ISAKMP_NEXT_v2CERTREQ] != NULL) {
+ 		DBG(DBG_CONTROLMORE,
+ 		    DBG_log("has a v2CERTREQ payload; going to decode it"));
+-		ikev2_decode_cr(md, &st->st_connection->requested_ca);
++		ikev2_decode_cr(md);
+ 	}
+ 
+ 	/* process AUTH payload now */
+diff -Naur libreswan-3.15-orig/programs/pluto/initiate.c libreswan-3.15/programs/pluto/initiate.c
+--- libreswan-3.15-orig/programs/pluto/initiate.c	2016-12-14 19:40:13.139578178 -0500
++++ libreswan-3.15/programs/pluto/initiate.c	2016-12-15 13:16:17.783861946 -0500
+@@ -1126,6 +1126,7 @@
+ 		CASE_fos_his_client:
+ 		case fos_his_client: /* IPSECKEY for his client */
+ 		{
++			struct gw_info *nullgw = c->gw_info;
+ 			/* We've finished last DNS queries: IPSECKEY for his client.
+ 			 * Using the information, try to instantiate a connection
+ 			 * and start negotiating.
+@@ -1136,9 +1137,10 @@
+ 			next_step = fos_done; /* no more queries */
+ 
+ 			c = build_outgoing_opportunistic_connection(
+-				(ac == NULL) ? c->gw_info : ac->gateways_from_dns,
++				(ac == NULL) ? nullgw : ac->gateways_from_dns,
+ 				&b->our_client,
+ 				&b->peer_client);
++			pfreeany(nullgw);
+ 
+ 			if (c == NULL) {
+ 				/* We cannot seem to instantiate a suitable connection:
+diff -Naur libreswan-3.15-orig/programs/pluto/kernel.c libreswan-3.15/programs/pluto/kernel.c
+--- libreswan-3.15-orig/programs/pluto/kernel.c	2016-12-14 19:40:13.153578672 -0500
++++ libreswan-3.15/programs/pluto/kernel.c	2016-12-15 13:16:17.784861983 -0500
+@@ -138,7 +138,7 @@
+ 	struct bare_shunt *bs = alloc_thing(struct bare_shunt,
+ 					    "bare shunt");
+ 
+-	bs->why = clone_str(why, "story for bare shunt");
++	bs->why = why;
+ 	bs->ours = *ours;
+ 	bs->his = *his;
+ 	bs->transport_proto = transport_proto;
+@@ -916,7 +916,6 @@
+ 
+ 	*pp = p->next;
+ 	DBG_bare_shunt("delete", p);
+-	pfree(p->why);
+ 	pfree(p);
+ }
+ 
+@@ -1172,8 +1171,7 @@
+ 				 */
+ 				struct bare_shunt *bs = *bs_pp;
+ 
+-				pfree(bs->why);
+-				bs->why = clone_str(why, "bare shunt story");
++				bs->why = why;
+ 				bs->policy_prio = policy_prio;
+ 				bs->said.spi = htonl(new_shunt_spi);
+ 				bs->said.proto = SA_INT;
+@@ -3293,7 +3291,7 @@
+ 	{
+ 		struct bare_shunt *bs = alloc_thing(struct bare_shunt, "orphan shunt");
+ 
+-		bs->why = clone_str("oe-failing", "orphaning shunt");
++		bs->why = "oe-failing";
+ 		bs->ours = sr->this.client;
+ 		bs->his = sr->that.client;
+ 		bs->transport_proto = sr->this.protocol;
+diff -Naur libreswan-3.15-orig/programs/pluto/kernel.h libreswan-3.15/programs/pluto/kernel.h
+--- libreswan-3.15-orig/programs/pluto/kernel.h	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/kernel.h	2016-12-15 13:16:17.784861983 -0500
+@@ -300,7 +300,7 @@
+ 	int transport_proto;
+ 	unsigned long count;
+ 	monotime_t last_activity;
+-	char *why;
++	const char *why;
+ 	struct bare_shunt *next;
+ };
+ extern void show_shunt_status(void);
+diff -Naur libreswan-3.15-orig/programs/pluto/keys.c libreswan-3.15/programs/pluto/keys.c
+--- libreswan-3.15-orig/programs/pluto/keys.c	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/keys.c	2016-12-15 13:16:17.784861983 -0500
+@@ -222,6 +222,8 @@
+ 		}
+ 	}
+ 
++	SECKEY_DestroyPrivateKey(privateKey);
++
+ 	DBG(DBG_CRYPT, DBG_log("RSA_sign_hash: Ended using NSS"));
+ 	return signature.len;
+ }
+diff -Naur libreswan-3.15-orig/programs/pluto/pluto_x509.h libreswan-3.15/programs/pluto/pluto_x509.h
+--- libreswan-3.15-orig/programs/pluto/pluto_x509.h	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/programs/pluto/pluto_x509.h	2016-12-15 13:16:17.784861983 -0500
+@@ -34,8 +34,8 @@
+ 
+ extern bool ikev1_decode_cert(struct msg_digest *md);
+ extern bool ikev2_decode_cert(struct msg_digest *md);
+-extern void ikev1_decode_cr(struct msg_digest *md, generalName_t **requested_ca);
+-extern void ikev2_decode_cr(struct msg_digest *md, generalName_t **requested_ca);
++extern void ikev1_decode_cr(struct msg_digest *md);
++extern void ikev2_decode_cr(struct msg_digest *md);
+ 
+ extern generalName_t *collect_rw_ca_candidates(struct msg_digest *md);
+ 
+diff -Naur libreswan-3.15-orig/programs/pluto/state.c libreswan-3.15/programs/pluto/state.c
+--- libreswan-3.15-orig/programs/pluto/state.c	2016-12-14 19:40:13.159578884 -0500
++++ libreswan-3.15/programs/pluto/state.c	2016-12-15 13:16:17.784861983 -0500
+@@ -898,6 +898,8 @@
+ 
+ 	clear_dh_from_state(st);
+ 
++	free_generalNames(st->st_requested_ca, TRUE);
++
+ 	freeanychunk(st->st_firstpacket_me);
+ 	freeanychunk(st->st_firstpacket_him);
+ 	freeanychunk(st->st_tpacket);
+@@ -908,9 +910,11 @@
+ 	freeanychunk(st->st_ni);
+ 	freeanychunk(st->st_nr);
+ 
++	freeanychunk(st->st_dcookie);
++
+ 
+ #    define free_any_nss_symkey(p)  free_any_symkey(#p, &(p))
+-	/* ??? free_any_nss_symkey(st->st_shared_nss); */
++	free_any_nss_symkey(st->st_shared_nss);
+ 
+ 	/* same as st_skeyid_nss */
+ 	free_any_nss_symkey(st->st_skeyseed_nss);
+diff -Naur libreswan-3.15-orig/programs/pluto/state.h libreswan-3.15/programs/pluto/state.h
+--- libreswan-3.15-orig/programs/pluto/state.h	2016-12-14 19:40:13.146578425 -0500
++++ libreswan-3.15/programs/pluto/state.h	2016-12-15 13:16:17.785862018 -0500
+@@ -38,6 +38,7 @@
+ 
+ #include <nss.h>
+ #include <pk11pub.h>
++#include <x509.h>
+ 
+ #ifdef XAUTH_HAVE_PAM
+ # include <signal.h>
+@@ -480,6 +481,7 @@
+ 	bool st_xauth_soft;                     /* XAUTH failed but policy is to soft fail */
+ 	bool st_seen_fragvid;                   /* should really use st_seen_vendorid, but no one else is */
+ 	bool st_seen_fragments;                 /* did we receive ike fragments from peer, if so use them in return as well */
++	generalName_t *st_requested_ca;	/* collected certificate requests */
+ };
+ 
+ /* global variables */
+diff -Naur libreswan-3.15-orig/programs/pluto/timer.c libreswan-3.15/programs/pluto/timer.c
+--- libreswan-3.15-orig/programs/pluto/timer.c	2016-12-14 19:40:13.143578319 -0500
++++ libreswan-3.15/programs/pluto/timer.c	2016-12-15 13:16:17.785862018 -0500
+@@ -485,6 +485,23 @@
+ 	event_schedule(EVENT_SA_EXPIRE, 0, pst);
+ }
+ 
++static void delete_pluto_event(struct pluto_event **evp)
++{
++        struct pluto_event *e = *evp;
++
++        if (e == NULL) {
++                DBG(DBG_CONTROLMORE, DBG_log("%s cannot delete NULL event", __func__));
++                return;
++        }
++        /* ??? when would e->ev be NULL? */
++        if (e->ev != NULL) {
++                event_free(e->ev);
++                e->ev = NULL;
++        }
++        pfree(e);
++        *evp = NULL;
++}
++
+ static event_callback_routine timer_event_cb;
+ static void timer_event_cb(evutil_socket_t fd UNUSED, const short event UNUSED, void *arg)
+ {
+@@ -761,27 +778,10 @@
+ 		bad_case(type);
+ 	}
+ 
+-	pfree(ev);
++	delete_pluto_event(&ev);
+ 	reset_cur_state();
+ }
+ 
+-static void delete_pluto_event(struct pluto_event **evp)
+-{
+-	struct pluto_event *e = *evp;
+-
+-	if (e == NULL) {
+-		DBG(DBG_CONTROLMORE, DBG_log("%s cannot delete NULL event", __func__));
+-		return;
+-	}
+-	/* ??? when would e->ev be NULL? */
+-	if (e->ev != NULL) {
+-		event_free(e->ev);
+-		e->ev = NULL;
+-	}
+-	pfree(e);
+-	*evp =  NULL;
+-}
+-
+ /*
+  * Delete an event.
+  */
+diff -Naur libreswan-3.15-orig/programs/pluto/x509.c libreswan-3.15/programs/pluto/x509.c
+--- libreswan-3.15-orig/programs/pluto/x509.c	2016-12-14 19:40:13.148578496 -0500
++++ libreswan-3.15/programs/pluto/x509.c	2016-12-15 13:16:57.461293421 -0500
+@@ -251,6 +251,7 @@
+ {
+ 	bool match = FALSE;
+ 	CERTCertDBHandle *handle;
++	CERTCertificate *cacert = NULL;
+ 	char abuf[ASN1_BUF_LEN], bbuf[ASN1_BUF_LEN];
+ 
+ 	dntoa(abuf, ASN1_BUF_LEN, a);
+@@ -262,30 +263,33 @@
+ 	/* no CA b specified -> any CA a is accepted */
+ 	if (b.ptr == NULL) {
+ 		*pathlen = (a.ptr == NULL) ? 0 : MAX_CA_PATH_LEN;
+-		return TRUE;
++		match = TRUE;
++		goto end;
+ 	}
+ 
+ 	/* no CA a specified -> trust cannot be established */
+ 	if (a.ptr == NULL) {
+ 		*pathlen = MAX_CA_PATH_LEN;
+-		return FALSE;
++		goto end;
+ 	}
+ 
+ 	*pathlen = 0;
+ 
+ 	/* CA a equals CA b -> we have a match */
+-	if (same_dn_any_order(a, b))
+-		return TRUE;
++	if (same_dn_any_order(a, b)) {
++		match = TRUE;
++		goto end;
++	}
++		
+ 
+ 	handle = CERT_GetDefaultCertDB();
+ 	if (handle == NULL) {
+ 		libreswan_log("trusted_ca_nss handle failure");
+-		return FALSE;
++		goto end;
+ 	}
+ 
+ 	/* CA a might be a subordinate CA of b */
+ 	while ((*pathlen)++ < MAX_CA_PATH_LEN) {
+-		CERTCertificate *cacert = NULL;
+ 		SECItem a_dn = chunk_to_secitem(a);
+ 		chunk_t i_dn = empty_chunk;
+ 
+@@ -306,12 +310,17 @@
+ 		/* go one level up in the CA chain */
+ 		a = i_dn;
+ 		CERT_DestroyCertificate(cacert);
++		cacert = NULL;
+ 	}
+ 
++end:
+ 	DBG(DBG_X509 | DBG_CONTROLMORE,
+ 		DBG_log("  trusted_ca_nss returning with %s",
+ 			match ? "match" : "failed"));
+ 
++	if (cacert != NULL) {
++		CERT_DestroyCertificate(cacert);
++	}
+ 	return match;
+ }
+ 
+@@ -706,12 +715,12 @@
+  * Convert all CERTCertificate general names to a list of pluto generalName_t
+  * Results go in *gn_out.
+  */
+-void get_pluto_gn_from_nss_cert(CERTCertificate *cert, generalName_t **gn_out)
++static void get_pluto_gn_from_nss_cert(CERTCertificate *cert, generalName_t **gn_out, PRArenaPool *arena)
+ {
+ 	generalName_t *pgn_list = NULL;
+ 	CERTGeneralName *cur_nss_gn, *first_nss_gn;
+ 
+-	cur_nss_gn = first_nss_gn = CERT_GetCertificateNames(cert, cert->arena);
++	cur_nss_gn = first_nss_gn = CERT_GetCertificateNames(cert, arena);
+ 
+ 	if (cur_nss_gn != NULL) {
+ 		do {
+@@ -791,7 +800,8 @@
+ 	generalName_t *gn = NULL;
+ 	generalName_t *gnt = NULL;
+ 
+-	get_pluto_gn_from_nss_cert(cert, &gn);
++	PRArenaPool *arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
++	get_pluto_gn_from_nss_cert(cert, &gn, arena);
+ 
+ 	for (gnt = gn; gn != NULL; gn = gn->next) {
+ 		struct id id;
+@@ -805,6 +815,9 @@
+ 	}
+ 
+ 	free_generalNames(gnt, FALSE);
++	if (arena != NULL) {
++		PORT_FreeArena(arena, PR_FALSE);
++	}
+ }
+ 
+ /*
+@@ -1077,9 +1090,11 @@
+  *  treat such payloads as synonymous with "X.509 Certificate -
+  *  Signature".
+  */
+-void ikev1_decode_cr(struct msg_digest *md, generalName_t **requested_ca)
++void ikev1_decode_cr(struct msg_digest *md)
+ {
+ 	struct payload_digest *p;
++	struct state *st = md->st;
++	generalName_t *requested_ca = st->st_requested_ca;
+ 
+ 	for (p = md->chain[ISAKMP_NEXT_CR]; p != NULL; p = p->next) {
+ 		struct isakmp_cr *const cr = &p->payload.cr;
+@@ -1102,8 +1117,9 @@
+ 				clonetochunk(gn->name, ca_name.ptr, ca_name.len,
+ 					"ca name");
+ 				gn->kind = GN_DIRECTORY_NAME;
+-				gn->next = *requested_ca;
+-				*requested_ca = gn;
++				gn->next = requested_ca;
++				requested_ca = gn;
++				st->st_requested_ca = requested_ca;
+ 			}
+ 
+ 			DBG(DBG_PARSING | DBG_CONTROL, {
+@@ -1127,9 +1143,12 @@
+  * This needs to handle the SHA-1 hashes instead. However, receiving CRs
+  * does nothing ATM.
+  */
+-void ikev2_decode_cr(struct msg_digest *md, generalName_t **requested_ca)
++void ikev2_decode_cr(struct msg_digest *md)
+ {
+ 	struct payload_digest *p;
++	struct state *st = md->st;
++
++	generalName_t *requested_ca = st->st_requested_ca;
+ 
+ 	for (p = md->chain[ISAKMP_NEXT_v2CERTREQ]; p != NULL; p = p->next) {
+ 		struct ikev2_certreq *const cr = &p->payload.v2certreq;
+@@ -1153,8 +1172,9 @@
+ 					"ca name");
+ 				gn->kind = GN_DIRECTORY_NAME;
+ 				gn->name = ca_name;
+-				gn->next = *requested_ca;
+-				*requested_ca = gn;
++				gn->next = requested_ca;
++				requested_ca = gn;
++				st->st_requested_ca = requested_ca;
+ 			}
+ 
+ 			DBG(DBG_PARSING | DBG_CONTROL, {
