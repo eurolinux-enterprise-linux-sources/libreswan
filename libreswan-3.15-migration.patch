@@ -1,0 +1,20 @@
+diff -Naur libreswan-3.15-orig/lib/libipsecconf/keywords.c libreswan-3.15/lib/libipsecconf/keywords.c
+--- libreswan-3.15-orig/lib/libipsecconf/keywords.c	2015-08-24 16:52:43.000000000 -0400
++++ libreswan-3.15/lib/libipsecconf/keywords.c	2015-09-24 12:52:54.377592510 -0400
+@@ -342,6 +342,8 @@
+ 	{ "interfaces",     kv_config, kt_string, KSF_INTERFACES, NOT_ENUM },
+ 	{ "curl-iface",     kv_config, kt_string, KSF_CURLIFACE, NOT_ENUM },
+ 	{ "curl-timeout",   kv_config, kt_number, KBF_CURLTIMEOUT, NOT_ENUM },
++	{ "curl_iface",     kv_config | kv_alias, kt_string,  KSF_CURLIFACE, NOT_ENUM },
++	{ "curl_timeout",   kv_config | kv_alias, kt_number,  KBF_CURLTIMEOUT, NOT_ENUM },
+ 	{ "myid",           kv_config, kt_string,    KSF_MYID, NOT_ENUM },
+ 	{ "myvendorid",     kv_config, kt_string,    KSF_MYVENDORID, NOT_ENUM },
+ 	{ "syslog",         kv_config, kt_string,    KSF_SYSLOG, NOT_ENUM },
+@@ -383,6 +385,7 @@
+ 	{ "ocsp-trustname",     kv_config, kt_string,    KSF_OCSPTRUSTNAME, NOT_ENUM },
+ 	{ "crlcheckinterval", kv_config, kt_time,     KBF_CRLCHECKINTERVAL, NOT_ENUM },
+ 	{ "crl_strict", kv_config | kv_alias, kt_bool,      KBF_STRICTCRLPOLICY, NOT_ENUM }, /* obsolete _ */
++	{ "strictcrlpolicy", kv_config | kv_alias, kt_bool, KBF_STRICTCRLPOLICY, NOT_ENUM }, /* obsolete used on openswan */
+ 	{ "ocsp_strict", kv_config | kv_alias, kt_bool,      KBF_STRICTOCSPPOLICY, NOT_ENUM }, /* obsolete _ */
+ 	{ "ocsp_enable", kv_config | kv_alias, kt_bool,      KBF_OCSPENABLE, NOT_ENUM }, /* obsolete _ */
+ 	{ "ocsp_uri", kv_config | kv_alias, kt_string,    KSF_OCSPURI, NOT_ENUM }, /* obsolete _ */

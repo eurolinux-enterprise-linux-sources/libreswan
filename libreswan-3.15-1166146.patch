@@ -1,0 +1,23 @@
+diff -Naur libreswan-3.15-orig/programs/pluto/connections.c libreswan-3.15/programs/pluto/connections.c
+--- libreswan-3.15-orig/programs/pluto/connections.c	2015-08-24 16:52:43.000000000 -0400
++++ libreswan-3.15/programs/pluto/connections.c	2015-09-24 13:19:16.151982555 -0400
+@@ -3334,6 +3334,11 @@
+ 	struct connection *d;
+ 	struct spd_route *sr;
+ 
++	/* weird things can happen to our interfaces */
++	if (!oriented(*c)) {
++		return NULL;
++	}
++
+ 	DBG(DBG_CONTROLMORE, {
+ 		char s1[SUBNETTOT_BUF];
+ 		char d1[SUBNETTOT_BUF];
+@@ -3378,7 +3383,6 @@
+ 				(sr->that.protocol == peer_protocol) &&
+ 				(!sr->that.port ||
+ 					sr->that.port == peer_port)) {
+-				passert(oriented(*c));
+ 				if (routed(sr->routing))
+ 					return c;
+ 

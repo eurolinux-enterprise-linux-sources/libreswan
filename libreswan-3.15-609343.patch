@@ -1,0 +1,26 @@
+diff --git a/programs/pluto/hostpair.c b/programs/pluto/hostpair.c
+index 9b14341..e3afecd 100644
+--- a/programs/pluto/hostpair.c
++++ b/programs/pluto/hostpair.c
+@@ -284,7 +284,8 @@ void release_dead_interfaces(void)
+ 					 */
+ 					passert(p == *pp);
+ 
+-					p->interface = NULL;
++					terminate_connection(p->name);
++					p->interface = NULL; /* withdraw orientation */
+ 
+ 					*pp = p->hp_next; /* advance *pp */
+ 					p->host_pair = NULL;
+diff --git a/programs/pluto/initiate.c b/programs/pluto/initiate.c
+index 056af59..eed8bf3 100644
+--- a/programs/pluto/initiate.c
++++ b/programs/pluto/initiate.c
+@@ -119,6 +119,7 @@ bool orient(struct connection *c)
+ 									c->name, c->interface->ip_dev->id_rname,
+ 									p->ip_dev->id_rname);
+ 							}
++							terminate_connection(c->name);
+ 							c->interface = NULL; /* withdraw orientation */
+ 							return FALSE;
+ 						}

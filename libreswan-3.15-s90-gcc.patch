@@ -1,0 +1,28 @@
+diff --git a/programs/pluto/ikev2_parent.c b/programs/pluto/ikev2_parent.c
+index 8fd0bba..db890f5 100644
+--- a/programs/pluto/ikev2_parent.c
++++ b/programs/pluto/ikev2_parent.c
+@@ -1596,8 +1596,8 @@ static stf_status ikev2_verify_and_decrypt_sk_payload(struct msg_digest *md,
+ 	 */
+ 	u_char *payload_end = chunk->ptr + chunk->len;
+ 	if (payload_end < (wire_iv_start + wire_iv_size + 1 + integ_size)) {
+-		libreswan_log("encrypted payload impossibly short (%zu)",
+-			      payload_end - wire_iv_start);
++		libreswan_log("encrypted payload impossibly short (%tu)",
++			      payload_end - wire_iv_start);
+ 		return STF_FAIL;
+ 	}
+ 
+@@ -4105,9 +4105,9 @@ stf_status process_encrypted_informational_ikev2(struct msg_digest *md)
+ 				}
+ 
+ 				if (v2del->isad_nrspi * v2del->isad_spisize != pbs_left(&p->pbs)) {
+-					libreswan_log("IPsec Delete Notification payload size is %tu but %u is required",
+-						pbs_left(&p->pbs),
+-						v2del->isad_nrspi * v2del->isad_spisize);
++					libreswan_log("IPsec Delete Notification payload size is %lu but %lu is required",
++						(long unsigned int) pbs_left(&p->pbs),
++						(long unsigned int) (v2del->isad_nrspi * v2del->isad_spisize));
+ 					return STF_FAIL + v2N_INVALID_SYNTAX;
+ 				}
+ 

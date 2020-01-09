@@ -1,0 +1,13 @@
+diff -Naur libreswan-3.15-orig/programs/pluto/ikev1_main.c libreswan-3.15/programs/pluto/ikev1_main.c
+--- libreswan-3.15-orig/programs/pluto/ikev1_main.c	2015-08-24 16:52:43.000000000 -0400
++++ libreswan-3.15/programs/pluto/ikev1_main.c	2015-09-03 11:57:52.632000000 -0400
+@@ -3011,6 +3011,9 @@
+ 									dst);
+ 
+ 				if (rc->newest_ipsec_sa == dst->st_serialno &&
++#ifdef HAVE_LABELED_IPSEC
++				    dst->sec_ctx == NULL &&
++#endif
+ 					(rc->policy & POLICY_UP)) {
+ 					/*
+ 					 * Last IPsec SA for a permanent

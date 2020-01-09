@@ -1,0 +1,13 @@
+diff --git a/programs/newhostkey/newhostkey.in b/programs/newhostkey/newhostkey.in
+index a25583e..31226c2 100755
+--- a/programs/newhostkey/newhostkey.in
++++ b/programs/newhostkey/newhostkey.in
+@@ -24,7 +24,7 @@ usage="Usage: $me [--output filename] [--seeddev device] [--bits n] \\
+ bits=
+ verbose=
+ host=
+-seeddev="--seeddev /dev/seeddev"
++seeddev="--seeddev /dev/random"
+ output="@FINALCONFDIR@/ipsec.secrets"
+ configdir="@FINALNSSDIR@"
+ password=

@@ -1,0 +1,20 @@
+/testing/guestbin/swan-prep
+west #
+ ipsec setup start
+Redirecting to: systemctl start ipsec.service
+west #
+ /testing/pluto/bin/wait-until-pluto-started
+west #
+ ipsec auto --add westnet-eastnet-aes256
+003 phase2alg string error: authentication algorithm does not take a variable key size, enc_alg="aes"(256), auth_alg="sha2_256", modp=""
+west #
+ echo "initdone"
+initdone
+west #
+ echo done
+done
+west #
+ if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
+west #
+ if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
+

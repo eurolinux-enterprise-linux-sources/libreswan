@@ -1,0 +1,11 @@
+diff -Naur libreswan-3.15-orig/initsystems/sysvinit/init.rhel libreswan-3.15/initsystems/sysvinit/init.rhel
+--- libreswan-3.15-orig/initsystems/sysvinit/init.rhel	2015-08-24 22:28:32.000000000 -0400
++++ libreswan-3.15/initsystems/sysvinit/init.rhel	2016-02-16 12:05:48.062134982 -0500
+@@ -237,6 +237,7 @@
+     status)
+ 	status -p ${plutopid} -l ${lockfile} ${IPSEC_EXECDIR}/pluto
+ 	RETVAL=$?
++	${IPSEC_EXECDIR}/whack --status | grep Total | sed 's/^000\ Total\ //'
+ 	;;
+     version)
+ 	version
