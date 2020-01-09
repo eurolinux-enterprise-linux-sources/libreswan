@@ -20,7 +20,7 @@
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
 Version: 3.15
-Release: %{?prever:0.}7.3%{?prever:.%{prever}}%{?dist}
+Release: %{?prever:0.}7.5%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Group: System Environment/Daemons
 Url: https://libreswan.org/
@@ -59,6 +59,7 @@ Patch23: libreswan-3.15-1290907-configdir.patch
 Patch24: libreswan-3.18-1313843-initwarn.patch
 Patch25: libreswan-3.18-1369990-delete-init.patch
 Patch26: libreswan-3.15-1403201-memleak-backports.patch
+Patch27: libreswan-3.16-DNSSEC.patch
 
 Requires: iproute >= 2.6.8 nss-tools nss-softokn
 
@@ -160,6 +161,7 @@ Libreswan is based on Openswan-2.6.38 which in turn is based on FreeS/WAN-2.04
 %patch24 -p1
 %patch25 -p1
 %patch26 -p1
+%patch27 -p1
 
 %build
 %if %{buildefence}
@@ -376,6 +378,9 @@ fi
 %endif
 
 %changelog
+* Tue Sep 19 2017 Paul Wouters <pwouters@redhat.com> - 3.15-7.5
+- Resolves: rhbz#1493917 (new-ksk-libreswan-el6) Add DNSSEC trust anchor KSK 2017
+
 * Sun Jan 15 2017 Paul Wouters <pwouters@redhat.com> - 3.15-7.3
 - Resolves: rhbz#1403201 pluto uses up available memory and fails with 'unable to popen'
 - Resolves: rhbz#1311360 When IKE rekeys [...] (updated for IKEv1 responder side)
