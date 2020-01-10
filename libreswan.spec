@@ -23,8 +23,8 @@
 
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
-Version: 3.23
-Release: %{?prever:0.}5%{?prever:.%{prever}}%{?dist}
+Version: 3.25
+Release: %{?prever:0.}2%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Group: System Environment/Daemons
 Url: https://libreswan.org/
@@ -33,15 +33,8 @@ Source1: ikev1_dsa.fax.bz2
 Source2: ikev1_psk.fax.bz2
 Source3: ikev2.fax.bz2
 
-Patch1: libreswan-3.23-seccomp.patch
-Patch2: libreswan-3.23-fixups.patch
-Patch3: libreswan-3.23-ppk-update.patch
-# rhbz#1573949
-Patch4: libreswan-3.23-fips-newkey-1544143.patch
-# rhbz#1574456
-Patch5: libreswan-3.23-rekey-1572425.patch
-# rhbz#1574457
-Patch6: libreswan-3.23-liveness-1553406.patch
+Patch1: libreswan-3.25-alg_info.patch
+Patch2: libreswan-3.25-relax-delete.patch
 
 Requires: iproute >= 2.6.8
 Requires: nss-tools nss-softokn
@@ -130,10 +123,6 @@ Libreswan is based on Openswan-2.6.38 which in turn is based on FreeS/WAN-2.04
 %setup -q -n libreswan-%{version}%{?prever}
 %patch1 -p1
 %patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
-%patch6 -p1
 
 %build
 %if %{buildefence}
@@ -265,7 +254,7 @@ export NSS_DISABLE_HW_GCM=1
 : "starting CAVS test for IKEv2"
 %{buildroot}%{_libexecdir}/ipsec/cavp -v2 ikev2.fax | diff -u ikev2.fax - > /dev/null
 : "starting CAVS test for IKEv1 RSASIG"
-%{buildroot}%{_libexecdir}/ipsec/cavp -v1sig ikev1_dsa.fax | diff -u ikev1_dsa.fax - > /dev/null
+%{buildroot}%{_libexecdir}/ipsec/cavp -v1dsa ikev1_dsa.fax | diff -u ikev1_dsa.fax - > /dev/null
 : "starting CAVS test for IKEv1 PSK"
 %{buildroot}%{_libexecdir}/ipsec/cavp -v1psk ikev1_psk.fax | diff -u ikev1_psk.fax - > /dev/null
 : "CAVS tests passed"
@@ -335,13 +324,19 @@ fi
 %endif
 
 %changelog
-* Fri May 25 2018 Paul Wouters <pwouters@redhat.com> - 3.23-5
-- Resolves: rhbz#1573949 ipsec newhostkey fails in FIPS mode [spec file only update]
+* Mon Jul 02 2018 Paul Wouters <pwouters@redhat.com> - 3.25-2
+- Resolves: rhbz#1597322 Relax deleting IKE SA's and IPsec SA's to avoid interop issues with third party VPN vendors
 
-* Wed May 02 2018 Paul Wouters <pwouters@redhat.com> - 3.23-4
-- Resolves: rhbz#1573949 ipsec newhostkey fails in FIPS mode when RSA key is generated
-- Resolves: rhbz#1574456 Shared IKE SA leads to rekey interop issues
-- Resolves: rhbz#1574457 IKEv2 liveness false positive on IKEv2 idle connections causes tunnel to be restarted
+* Wed Jun 27 2018 Paul Wouters <pwouters@redhat.com> - 3.25-1
+- Resolves: rhbz#1591817 rebase libreswan to 3.25
+- Resolves: rhbz#1536404 CERT_PKCS7_WRAPPED_X509 error
+- Resolves: rhbz#1544143 ipsec newhostkey fails in FIPS mode when RSA key is generated
+- Resolves: rhbz#1574011 libreswan is missing a Requires: unbound-libs >= 1.6.6
+
+* Fri Apr 27 2018 Paul Wouters <pwouters@redhat.com> - 3.23-4
+- Resolves: rhbz#1544143 ipsec newhostkey fails in FIPS mode when RSA key is generated
+- Resolves: rhbz#1553406 IKEv2 liveness false positive on IKEv2 idle connections causes tunnel to be restarted
+- Resolves: rhbz#1572425 shared IKE SA leads to rekey interop issues
 
 * Wed Feb 07 2018 Paul Wouters <pwouters@redhat.com> - 3.23-3
 - Resolves: rhbz#1471553 libreswan postquantum preshared key (PPK) support [IANA update]

@@ -11,7 +11,7 @@ Redirecting to: systemctl start ipsec.service
 east #
  /testing/pluto/bin/wait-until-pluto-started
 east #
- ipsec whack --debug-all --impair retransmits
+ ipsec whack --impair retransmits
 east #
  ipsec whack --listpubkeys
 000  
@@ -37,7 +37,7 @@ east #
 east #
  grep IKEv2_AUTH_ /tmp/pluto.log
 |    auth method: IKEv2_AUTH_NULL (0xd)
-|    auth method: IKEv2_AUTH_RSA (0x1)
+|    auth method: IKEv2_AUTH_DIGSIG (0xe)
 east #
 east #
  ../bin/check-for-core.sh

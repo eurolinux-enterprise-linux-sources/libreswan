@@ -1,0 +1,13 @@
+diff --git a/lib/libswan/alg_info.c b/lib/libswan/alg_info.c
+index fd45e4991..ade54db06 100644
+--- a/lib/libswan/alg_info.c
++++ b/lib/libswan/alg_info.c
+@@ -426,7 +426,7 @@ static bool parser_alg_info_add(const struct proposal_parser *parser,
+ 	LSWDBGP(DBG_PROPOSAL_PARSER, buf) {
+ 		lswlogs(buf, "algs:");
+ 		for (struct token *token = tokens; token->alg.ptr != NULL; token++) {
+-			lswlogf(buf, " algs[%zu] = '"PRISHUNK"'",
++			lswlogf(buf, " algs[%tu] = '"PRISHUNK"'",
+ 				token - tokens, SHUNKF(token->alg));
+ 		}
+ 	}
