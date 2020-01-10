@@ -1,0 +1,455 @@
+diff -Naur libreswan-3.25-orig/include/pluto_constants.h libreswan-3.25/include/pluto_constants.h
+--- libreswan-3.25-orig/include/pluto_constants.h	2019-05-02 10:54:07.265614654 -0400
++++ libreswan-3.25/include/pluto_constants.h	2019-05-02 10:55:42.634626504 -0400
+@@ -152,6 +152,7 @@
+ 	EVENT_SD_WATCHDOG,		/* update systemd's watchdog interval */
+ 	EVENT_PENDING_PHASE2,		/* do not make pending phase2 wait forever */
+ 	EVENT_CHECK_CRLS,		/* check/update CRLS */
++	EVENT_REVIVE_CONNS,
+ 
+ 	/* events associated with states */
+ 
+@@ -203,6 +204,9 @@
+ #define EVENT_CRYPTO_TIMEOUT_DELAY	RETRANSMIT_TIMEOUT_DEFAULT /* wait till the other side give up on us */
+ #define EVENT_PAM_TIMEOUT_DELAY		RETRANSMIT_TIMEOUT_DEFAULT /* wait until this side give up on PAM */
+ 
++#define REVIVE_CONN_DELAY      5 /* seconds */
++#define REVIVE_CONN_DELAY_MAX  300 /* Do not delay more than 5 minutes per attempt */
++
+ /*
+  * operational importance of this cryptographic operation.
+  * this determines if the operation will be dropped (because the other
+diff -Naur libreswan-3.25-orig/programs/pluto/connections.c libreswan-3.25/programs/pluto/connections.c
+--- libreswan-3.25-orig/programs/pluto/connections.c	2019-05-02 10:54:07.265614654 -0400
++++ libreswan-3.25/programs/pluto/connections.c	2019-05-02 10:55:42.635626515 -0400
+@@ -4629,3 +4629,28 @@
+ 		c->name, prio));
+ 	return prio;
+ }
++
++/*
++ * If the connection contains a newer SA, return it.
++ */
++so_serial_t get_newer_sa_from_connection(struct state *st)
++{
++	struct connection *c = st->st_connection;
++	so_serial_t newest;
++
++	if (IS_IKE_SA(st)) {
++		newest = c->newest_isakmp_sa;
++		DBG(DBG_CONTROL, DBG_log("picked newest_isakmp_sa #%lu for #%lu",
++			newest, st->st_serialno));
++        } else {
++                newest = c->newest_ipsec_sa;
++                DBG(DBG_CONTROL, DBG_log("picked newest_ipsec_sa #%lu for #%lu",
++                    newest, st->st_serialno));
++        }
++
++        if (newest != SOS_NOBODY && newest > st->st_serialno) {
++                return newest;
++        } else {
++                return SOS_NOBODY;
++        }
++}
+diff -Naur libreswan-3.25-orig/programs/pluto/connections.h libreswan-3.25/programs/pluto/connections.h
+--- libreswan-3.25-orig/programs/pluto/connections.h	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/connections.h	2019-05-02 10:57:22.626689082 -0400
+@@ -343,6 +343,7 @@
+ 	u_int32_t statsval;	/* track what we have told statsd */
+ 	u_int16_t nflog_group;	/* NFLOG group - 0 means disabled  */
+ 	msgid_t ike_window;     /* IKE v2 window size 7296#section-2.3 */
++	int revive_delay;
+ };
+ 
+ extern void parse_mark_mask(const struct connection* c,int * mark, int * mask);
+@@ -385,7 +386,7 @@
+ 			     struct xfrm_user_sec_ctx_ike *uctx,
+ #endif
+ 			     err_t why);
+-extern void terminate_connection(const char *name);
++extern void terminate_connection(const char *name, bool quiet);
+ extern void release_connection(struct connection *c, bool relations);
+ extern void delete_connection(struct connection *c, bool relations);
+ extern void suppress_delete(struct connection *c);
+@@ -539,3 +540,8 @@
+ extern bool idr_wildmatch(const struct connection *c, const struct id *b);
+ 
+ extern uint32_t calculate_sa_prio(const struct connection *c);
++
++so_serial_t get_newer_sa_from_connection(struct state *st);
++
++extern void flush_revival(const struct connection *c);
++
+diff -Naur libreswan-3.25-orig/programs/pluto/hostpair.c libreswan-3.25/programs/pluto/hostpair.c
+--- libreswan-3.25-orig/programs/pluto/hostpair.c	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/hostpair.c	2019-05-02 10:55:42.635626515 -0400
+@@ -274,7 +274,7 @@
+ 					 */
+ 					passert(p == *pp);
+ 
+-					terminate_connection(p->name);
++					terminate_connection(p->name, FALSE);
+ 					p->interface = NULL; /* withdraw orientation */
+ 
+ 					*pp = p->hp_next; /* advance *pp */
+diff -Naur libreswan-3.25-orig/programs/pluto/initiate.c libreswan-3.25/programs/pluto/initiate.c
+--- libreswan-3.25-orig/programs/pluto/initiate.c	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/initiate.c	2019-05-02 10:55:42.640626568 -0400
+@@ -148,7 +148,7 @@
+ 								c->interface->ip_dev->id_rname,
+ 								p->ip_dev->id_rname);
+ 							}
+-						terminate_connection(c->name);
++						terminate_connection(c->name, FALSE);
+ 						c->interface = NULL; /* withdraw orientation */
+ 						return FALSE;
+ 					}
+@@ -401,7 +401,7 @@
+ 		{
+ 			/* This might delete c if CK_INSTANCE */
+ 			/* ??? is there a chance hp becomes dangling? */
+-			terminate_connection(d->name);
++			terminate_connection(d->name, FALSE);
+ 		}
+ 		d = next;
+ 	}
+@@ -750,6 +750,12 @@
+ 				    fmt_conn_instance(c, cib));
+ 		    });
+ 
++		if (sr->routing == RT_ROUTED_PROSPECTIVE && eclipsable(sr)) {
++			DBG(DBG_CONTROL, DBG_log("route is eclipsed"));
++			sr->routing = RT_ROUTED_ECLIPSED;
++			eclipse_count++;
++		}
++
+ 		idtoa(&sr->this.id, mycredentialstr, sizeof(mycredentialstr));
+ 
+ 		passert(c->policy & POLICY_OPPORTUNISTIC); /* can't initiate Road Warrior connections */
+diff -Naur libreswan-3.25-orig/programs/pluto/kernel.c libreswan-3.25/programs/pluto/kernel.c
+--- libreswan-3.25-orig/programs/pluto/kernel.c	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/kernel.c	2019-05-02 10:55:42.640626568 -0400
+@@ -982,22 +982,11 @@
+ 	if (ro != NULL && !routes_agree(ro, c)) {
+ 		char cib[CONN_INST_BUF];
+ 		loglog(RC_LOG_SERIOUS,
+-			"cannot route -- route already in use for \"%s\"%s",
++			"cannot route -- route already in use for \"%s\"%s - but allowing anyway",
+ 			ro->name, fmt_conn_instance(ro, cib));
+-		/*
+-		 * We ignore this if the stack supports overlapping, and this
+-		 * connection was marked that overlapping is OK.  Below we will
+-		 * check the other eroute, ero.
+-		 */
+-		if (!compatible_overlapping_connections(c, ero)) {
+-			/*
+-			 * Another connection is already using the eroute.
+-			 * TODO: NETKEY can do this?
+-			 */
+-			return route_impossible;
+-		}
+ 	}
+ 
++
+ 	/* if there is an eroute for another connection, there is a problem */
+ 	if (ero != NULL && ero != c) {
+ 		/*
+@@ -3080,7 +3069,8 @@
+ 		/* record unrouting */
+ 		if (route_installed) {
+ 			do {
+-				passert(!erouted(rosr->routing));
++				 DBG(DBG_CONTROL,
++					DBG_log("ro name=%s, rosr->routing=%d", ro->name, rosr->routing));
+ 				rosr->routing = RT_UNROUTED;
+ 
+ 				/* no need to keep old value */
+@@ -3292,6 +3282,14 @@
+ 		DBG(DBG_KERNEL,
+ 			DBG_log("set up incoming SA, ref=%u/%u", st->st_ref,
+ 				st->st_refhim));
++
++		/*
++		 * We successfully installed an IPsec SA, meaning it is safe
++		 * to clear our revival back-off delay. This is based on the
++		 * assumption that an unwilling partner might complete an IKE
++		 * SA to us, but won't complete an IPsec SA to us.
++		 */
++		st->st_connection->revive_delay = 0;
+ 	}
+ 
+ 	if (rb == route_unnecessary)
+diff -Naur libreswan-3.25-orig/programs/pluto/kernel.h libreswan-3.25/programs/pluto/kernel.h
+--- libreswan-3.25-orig/programs/pluto/kernel.h	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/kernel.h	2019-05-02 10:55:42.640626568 -0400
+@@ -421,14 +421,6 @@
+ #endif
+ 			      );
+ 
+-static inline bool compatible_overlapping_connections(const struct connection *a,
+-						      const struct connection *b)
+-{
+-	return kernel_ops->overlap_supported &&
+-	       a != NULL && b != NULL &&
+-	       a != b &&
+-	       LIN(POLICY_OVERLAPIP, a->policy & b->policy);
+-}
+ 
+ #ifdef KLIPS
+ extern const struct kernel_ops klips_kernel_ops;
+diff -Naur libreswan-3.25-orig/programs/pluto/pluto_constants.c libreswan-3.25/programs/pluto/pluto_constants.c
+--- libreswan-3.25-orig/programs/pluto/pluto_constants.c	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/pluto_constants.c	2019-05-02 10:55:42.636626526 -0400
+@@ -121,6 +121,7 @@
+ 	"EVENT_SD_WATCHDOG",
+ 	"EVENT_PENDING_PHASE2",
+ 	"EVENT_CHECK_CRLS",
++	"EVENT_REVIVE_CONNS",
+ 
+ 	"EVENT_SO_DISCARD",
+ 	"EVENT_v1_RETRANSMIT",
+diff -Naur libreswan-3.25-orig/programs/pluto/rcv_whack.c libreswan-3.25/programs/pluto/rcv_whack.c
+--- libreswan-3.25-orig/programs/pluto/rcv_whack.c	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/rcv_whack.c	2019-05-02 10:55:42.636626526 -0400
+@@ -380,8 +380,14 @@
+ 	 * To make this more useful, in only this combination,
+ 	 * delete will silently ignore the lack of the connection.
+ 	 */
+-	if (m->whack_delete)
+-		delete_connections_by_name(m->name, !m->whack_connection);
++	if (m->whack_delete) {
++		if (m->name == NULL) {
++			whack_log(RC_FATAL, "received whack command to delete a connection, but did not receive the connection name - ignored"); 
++		} else {
++			terminate_connection(m->name, TRUE);
++			delete_connections_by_name(m->name, !m->whack_connection);
++		}
++	}
+ 
+ 	if (m->whack_deleteuser) {
+ 		DBG_log("received whack to delete connection by user %s",
+@@ -573,7 +579,7 @@
+ 	}
+ 
+ 	if (m->whack_terminate)
+-		terminate_connection(m->name);
++		terminate_connection(m->name, TRUE);
+ 
+ 	if (m->whack_status)
+ 		show_status();
+diff -Naur libreswan-3.25-orig/programs/pluto/state.c libreswan-3.25/programs/pluto/state.c
+--- libreswan-3.25-orig/programs/pluto/state.c	2019-05-02 10:54:07.252614517 -0400
++++ libreswan-3.25/programs/pluto/state.c	2019-05-02 10:56:28.447113336 -0400
+@@ -77,6 +77,8 @@
+ #include "crypt_dh.h"
+ #include "hostpair.h"
+ 
++#include "kernel.h"
++
+ #include <nss.h>
+ #include <pk11pub.h>
+ #include <keyhi.h>
+@@ -128,6 +130,115 @@
+ 	[STATE_UNDEFINED] = &state_undefined,
+ };
+ 
++/*
++ * Revival mechanism: keep track of connections
++ * that should be kept up, even though all their
++ * states have been deleted.
++ *
++ * We record the connection names.
++ * Each name is recorded only once.
++ *
++ * XXX: This functionality totally overlaps both "initiate" and
++ * "pending" and should be merged (howerver, this simple code might
++ * prove to be a better starting point).
++ */
++
++struct revival {
++	char *name;
++	struct revival *next;
++};
++
++static struct revival *revivals = NULL;
++
++/*
++ * XXX: Return connection C's revival object's link, if found.  If the
++ * connection C can't be found, then the address of the revival list's
++ * tail is returned.  Perhaps, exiting the loop and returning NULL
++ * would be more obvious.
++ */
++static struct revival **find_revival(const struct connection *c)
++{
++	for (struct revival **rp = &revivals; ; rp = &(*rp)->next) {
++		if (*rp == NULL || streq((*rp)->name, c->name)) {
++			return rp;
++		}
++	}
++}
++
++/*
++ * XXX: In addition to freeing RP (and killing the pointer), this
++ * "free" function has the side effect of unlinks RP from the revival
++ * list.  Perhaps free*() isn't the best name.
++ */
++static void free_revival(struct revival **rp)
++{
++	struct revival *r = *rp;
++	*rp = r->next;
++	pfree(r->name);
++	pfree(r);
++}
++
++void flush_revival(const struct connection *c)
++{
++	struct revival **rp = find_revival(c);
++
++	if (*rp == NULL) {
++		DBG(DBG_CONTROL, DBG_log("flush revival: connection '%s' wasn't on the list",
++		    c->name));
++	} else {
++		DBG(DBG_CONTROL, DBG_log("flush revival: connection '%s' revival flushed",
++		    c->name));
++		free_revival(rp);
++	}
++}
++
++static void add_revival(struct connection *c)
++{
++	if (*find_revival(c) == NULL) {
++		struct revival *r = alloc_thing(struct revival,
++						"revival struct");
++
++		r->name = clone_str(c->name, "revival conn name");
++		r->next = revivals;
++		revivals = r;
++		int delay = c->revive_delay;
++		DBG(DBG_CONTROL, DBG_log("add revival: connection '%s' added to the list and scheduled for %d seconds",
++		    c->name, delay));
++		c->revive_delay = min(delay + REVIVE_CONN_DELAY,
++						REVIVE_CONN_DELAY_MAX);
++		/*
++		 * XXX: Schedule the next revival using this
++		 * connection's revival delay and not the most urgent
++		 * connection's revival delay.  Trying to fix this
++		 * here just is annoying and probably of marginal
++		 * benefit: it is something better handled with a
++		 * proper connection event so that the event loop deal
++		 * with all the math (this code would then be
++		 * deleted); and would encroach even further on
++		 * "initiate" and "pending" functionality.
++		 */
++		event_schedule(EVENT_REVIVE_CONNS, deltatime(delay), NULL);
++	}
++}
++
++void revive_conns(void)
++{
++	/*
++	 * XXX: Revive all listed connections regardless of their
++	 * DELAY.  See note above in add_revival().
++	 */
++	while (revivals != NULL) {
++		libreswan_log("Initiating connection %s which received a Delete/Notify but must remain up per local policy",
++			revivals->name);
++		initiate_connection(revivals->name, NULL_FD, empty_lmod, empty_lmod, pcim_demand_crypto, NULL);
++		free_revival(&revivals);
++	}
++}
++
++/* end of revival mechanism */
++
++
++
+ void lswlog_finite_state(struct lswlog *buf, const struct finite_state *fs)
+ {
+ 	if (fs == NULL) {
+@@ -1156,6 +1267,23 @@
+ 	if (c->newest_isakmp_sa == st->st_serialno)
+ 		c->newest_isakmp_sa = SOS_NOBODY;
+ 
++	if ((c->policy & POLICY_UP) && IS_IKE_SA(st)) {
++		so_serial_t newer_sa = get_newer_sa_from_connection(st);
++
++		if (state_by_serialno(newer_sa) != NULL) {
++			/*
++			 * Presumably this is an old state that has
++			 * either been rekeyed or replaced.
++			 */
++			DBG(DBG_CONTROL, DBG_log("IKE delete_state() for #%lu and connection '%s' that is supposed to remain up;  not a problem - have newer #%lu",
++                            st->st_serialno, c->name, newer_sa));
++		} else {
++			libreswan_log("deleting IKE SA for connection '%s' but connection is supposed to remain up; schedule EVENT_REVIVE_CONNS",
++				c->name);
++			add_revival(c);
++		}
++	}
++
+ 	/*
+ 	 * fake a state change here while we are still associated with a
+ 	 * connection.  Without this the state logging (when enabled) cannot
+diff -Naur libreswan-3.25-orig/programs/pluto/state.h libreswan-3.25/programs/pluto/state.h
+--- libreswan-3.25-orig/programs/pluto/state.h	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/state.h	2019-05-02 10:55:42.638626547 -0400
+@@ -809,5 +809,5 @@
+ 
+ extern bool uniqueIDs;  /* --uniqueids? */
+ extern void ISAKMP_SA_established(const struct state *pst);
+-
++extern void revive_conns(void);
+ #endif /* _STATE_H */
+diff -Naur libreswan-3.25-orig/programs/pluto/terminate.c libreswan-3.25/programs/pluto/terminate.c
+--- libreswan-3.25-orig/programs/pluto/terminate.c	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/terminate.c	2019-05-02 10:55:42.638626547 -0400
+@@ -90,7 +90,7 @@
+ 	return 1;
+ }
+ 
+-void terminate_connection(const char *name)
++void terminate_connection(const char *name, bool quiet)
+ {
+ 	/*
+ 	 * Loop because more than one may match (master and instances)
+@@ -112,7 +112,8 @@
+ 	} else {
+ 		int count = foreach_connection_by_alias(name, terminate_a_connection, NULL);
+ 		if (count == 0) {
+-			loglog(RC_UNKNOWN_NAME,
++			if (!quiet)
++				loglog(RC_UNKNOWN_NAME,
+ 				  "no such connection or aliased connection named \"%s\"", name);
+ 		} else {
+ 			loglog(RC_COMMENT, "terminated %d connections from aliased connection \"%s\"",
+diff -Naur libreswan-3.25-orig/programs/pluto/timer.c libreswan-3.25/programs/pluto/timer.c
+--- libreswan-3.25-orig/programs/pluto/timer.c	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/timer.c	2019-05-02 10:55:42.638626547 -0400
+@@ -334,6 +334,7 @@
+ 	case EVENT_SD_WATCHDOG:
+ 	case EVENT_NAT_T_KEEPALIVE:
+ 	case EVENT_CHECK_CRLS:
++	case EVENT_REVIVE_CONNS:
+ 		passert(st == NULL);
+ 		break;
+ 
+@@ -435,6 +436,10 @@
+ 		check_crls();
+ 		break;
+ 
++	case EVENT_REVIVE_CONNS:
++		revive_conns();
++		break;
++
+ 	case EVENT_v2_RELEASE_WHACK:
+ 		DBG(DBG_CONTROL, DBG_log("%s releasing whack for #%lu %s (sock=%d)",
+ 					enum_show(&timer_event_names, type),
+diff -Naur libreswan-3.25-orig/programs/pluto/timer.h libreswan-3.25/programs/pluto/timer.h
+--- libreswan-3.25-orig/programs/pluto/timer.h	2018-06-27 11:42:26.000000000 -0400
++++ libreswan-3.25/programs/pluto/timer.h	2019-05-02 10:55:42.638626547 -0400
+@@ -47,4 +47,6 @@
+ #define delete_dpd_event(ST) delete_state_event((ST), &(ST)->st_dpd_event)
+ 
+ extern void timer_list(void);
++extern char *revive_conn;
++
+ #endif /* _TIMER_H */

@@ -1,0 +1,86 @@
+diff -Naur libreswan-3.25-orig/programs/pluto/nss_cert_verify.c libreswan-3.25/programs/pluto/nss_cert_verify.c
+--- libreswan-3.25-orig/programs/pluto/nss_cert_verify.c	2019-04-11 12:50:35.423733161 +0200
++++ libreswan-3.25/programs/pluto/nss_cert_verify.c	2019-04-11 12:51:58.832735953 +0200
+@@ -121,7 +121,7 @@
+ 	return FALSE;
+ }
+ 
+-static int nss_err_to_revfail(CERTVerifyLogNode *node)
++static int nss_err_to_revfail(char *prefix, CERTVerifyLogNode *node)
+ {
+ 	int ret = VERIFY_RET_FAIL;
+ 
+@@ -131,7 +131,7 @@
+ 
+ 	loglog(RC_LOG_SERIOUS, "Certificate %s failed verification",
+ 		    node->cert->subjectName);
+-	loglog(RC_LOG_SERIOUS, "ERROR: %s",
++	loglog(RC_LOG_SERIOUS, "%s: %s", prefix,
+ 		    nss_err_str(node->error));
+ 
+ 	if (node->error == SEC_ERROR_REVOKED_CERTIFICATE) {
+@@ -298,18 +298,18 @@
+ 	cvout[1].value.pointer.chain = NULL;
+ 	cvout[2].type = cert_po_end;
+ 
+-	int fin;
++	int fin = VERIFY_RET_FAIL;
+ 
+ #ifdef NSS_IPSEC_PROFILE
+ 	SECStatus rv = CERT_PKIXVerifyCert(end_cert, certificateUsageIPsec,
+ 						cvin, cvout, NULL);
+ 	if (rv != SECSuccess || cur_log->count > 0) {
+ 		if (cur_log->count > 0 && cur_log->head != NULL) {
+-			fin = nss_err_to_revfail(cur_log->head);
++			fin = nss_err_to_revfail("warning", cur_log->head);
+ 		} else {
+ 			/*
+ 			 * An rv != SECSuccess without CERTVerifyLog
+-			 * results should not * happen, but catch it anyway
++			 * results should not happen, but catch it anyway
+ 			 */
+ 			loglog(RC_LOG_SERIOUS, "X509: unspecified NSS verification failure");
+ 			fin = VERIFY_RET_FAIL;
+@@ -319,7 +319,11 @@
+ 		*end_out = end_cert;
+ 		fin = VERIFY_RET_OK;
+ 	}
+-#else
++#endif
++
++	if (fin != VERIFY_RET_OK)
++	{
++
+ 	/* kludge alert!!
+ 	 * verification may be performed twice: once with the
+ 	 * 'client' usage and once with 'server', which is an NSS
+@@ -332,7 +336,7 @@
+ 
+ 	for (usage = certificateUsageSSLClient; ; usage = certificateUsageSSLServer) {
+ 		SECStatus rv = CERT_PKIXVerifyCert(end_cert, usage, cvin, cvout, NULL);
+-		if (rv != SECSuccess || cur_log->count > 0) {
++		if (rv != SECSuccess) {
+ 			if (cur_log->count > 0 && cur_log->head != NULL) {
+ 				if (usage == certificateUsageSSLClient &&
+ 				    RETRYABLE_TYPE(cur_log->head->error)) {
+@@ -348,7 +352,8 @@
+ 					cvout[1].value.pointer.chain = NULL;
+ 					continue;
+ 				} else {
+-					fin = nss_err_to_revfail(cur_log->head);
++					fin = nss_err_to_revfail("ERROR", cur_log->head);
++					loglog(RC_LOG_SERIOUS, "X509: verification failure using NSS TLS profile validation");
+ 				}
+ 			} else {
+ 				/*
+@@ -365,7 +370,9 @@
+ 		}
+ 		break;
+ 	}
+-#endif
++
++	}
++
+ 	pexpect(fin != 0);
+ 
+ 	CERT_DestroyCertList(trustcl);
