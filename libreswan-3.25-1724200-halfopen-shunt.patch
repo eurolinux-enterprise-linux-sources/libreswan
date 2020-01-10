@@ -1,0 +1,13 @@
+diff -Naur libreswan-3.25-orig/programs/pluto/state.c libreswan-3.25/programs/pluto/state.c
+--- libreswan-3.25-orig/programs/pluto/state.c	2019-07-03 15:52:47.246474906 -0400
++++ libreswan-3.25/programs/pluto/state.c	2019-07-03 15:54:37.671850020 -0400
+@@ -1101,7 +1101,8 @@
+ #endif
+ 
+ 	/* If we are failed OE initiator, make shunt bare */
+-	if (IS_IKE_SA(st) && (c->policy & POLICY_OPPORTUNISTIC) &&
++	if (IS_IKE_SA(st) && c->newest_isakmp_sa == st->st_serialno &&
++		(c->policy & POLICY_OPPORTUNISTIC) &&
+ 	    (st->st_state == STATE_PARENT_I1 || st->st_state == STATE_PARENT_I2)) {
+ 		ipsec_spi_t failure_shunt = shunt_policy_spi(c, FALSE /* failure_shunt */);
+ 		ipsec_spi_t nego_shunt = shunt_policy_spi(c, TRUE /* negotiation shunt */);

@@ -24,7 +24,7 @@
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
 Version: 3.25
-Release: %{?prever:0.}4.8%{?prever:.%{prever}}%{?dist}
+Release: %{?prever:0.}8.1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Group: System Environment/Daemons
 Url: https://libreswan.org/
@@ -36,15 +36,15 @@ Source3: ikev2.fax.bz2
 Patch1: libreswan-3.25-alg_info.patch
 Patch2: libreswan-3.25-relax-delete.patch
 Patch3: libreswan-3.25-EKU-1639404.patch
-Patch4: libreswan-3.23-zerolengthkey.patch
-Patch5: libreswan-3.25-1625303-recursive-incl.patch
-Patch6: libreswan-3.23-del-with-notify-1630355.patch
-Patch7: libreswan-3.25-1664244-xauth-null-pwd.patch
+Patch4: libreswan-3.23-del-with-notify-1630355.patch
+Patch5: libreswan-3.23-zerolengthkey.patch
+Patch6: libreswan-3.25-1625303-recursive-incl.patch
+Patch7: libreswan-3.25-1623279-xauth-null-pwd.patch
 Patch8: libreswan-3.25-1664521-fips-keysize.patch
-Patch9: libreswan-3.27-1672921-delete.patch
-Patch10: libreswan-3.25-1679735-critical_flag.patch
-Patch11: libreswan-3.25-1673105-down-restart.patch
-Patch12: libreswan-3.25-1686991-ikev1-del.patch
+Patch9: libreswan-3.25-1679735-critical_flag.patch
+Patch10: libreswan-3.25-1673105-down-restart.patch
+Patch11: libreswan-3.25-1686991-ikev1-del.patch
+Patch12: libreswan-3.25-1724200-halfopen-shunt.patch
 
 Requires: iproute >= 2.6.8
 Requires: nss-tools nss-softokn
@@ -54,8 +54,8 @@ BuildRequires: nspr-devel
 BuildRequires: pam-devel
 BuildRequires: xmlto
 # minimum nss version for IPsec profile support, see rhbz#1212132
-Requires: nss >= 3.36.0-7.1
-BuildRequires: nss-devel >= 3.36.0-7.1
+Requires: nss >= 3.36.0-8
+BuildRequires: nss-devel >= 3.36.0-8
 
 %if %{?rhel} <= 6
 BuildRequires: libevent2-devel net-tools
@@ -349,38 +349,26 @@ fi
 %endif
 
 %changelog
-* Thu May 09 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.8
-- Resolves: rhbz#1708060 IKEv1 traffic interruption when responder deletes SAs 60 seconds before EVENT_SA_REPLACE [rhel-7.6.z]
+* Wed Aug 28 2019 Paul Wouters <pwouters@redhat.com> - 3.25-8.1
+- Resolves: rhbz#1746052 libreswan: XFRM policy for OE/32 peer is deleted when shunts for previous half-open state expire [rhel-7.7.z]
 
-* Thu May 02 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.7
-- Resolves: rhbz#1683577 Opportunistic IPsec instances of /32 groups or auto=start [updated for eclipsed handling]
+* Tue May 07 2019 Paul Wouters <pwouters@redhat.com> - 3.25-8
+- Resolves: rhbz#1686991 IKEv1 traffic interruption when responder deletes SAs 60 seconds before EVENT_SA_REPLACE
 
-* Thu Apr 11 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.6
-- Resolves: rhbz#1680483 libreswan using NSS IPsec profiles regresses when critical flags are set causing validation failure [rhel-7.6.z] [updated]
+* Wed Feb 27 2019 Paul Wouters <pwouters@redhat.com> - 3.25-7
+- Resolves: rhbz#1673105 Opportunistic IPsec instances of /32 groups or auto=start that receive delete won't restart
 
-* Sun Mar 31 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.5
-- Resolves: rhbz#1683577 Opportunistic IPsec instances of /32 groups or auto=start that receive delete won't restart [rhel-7.6.z] [updated]
+* Mon Feb 04 2019 Paul Wouters <pwouters@redhat.com> - 3.25-6
+- Resolves: rhbz#1630355 Libreswan crash upon receiving ISAKMP_NEXT_D with appended ISAKMP_NEXT_N [updated]
+- Resolves: rhbz#1679735 libreswan using NSS IPsec profiles regresses when critical flags are set causing validation failure
 
-* Tue Feb 26 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.4
-- Resolves: rhbz#1683577 Opportunistic IPsec instances of /32 groups or auto=start that receive delete won't restart [rhel-7.6.z]
-
-* Mon Feb 25 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.3
-- Resolves: rhbz#1680483 libreswan using NSS IPsec profiles regresses when critical flags are set causing validation failure [rhel-7.6.z]
-
-* Fri Feb 15 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.2
-- Resolves: rhbz#1672921 - Libreswan crash upon receiving ISAKMP_NEXT_D with appended ISAKMP_NEXT_N [updated bugfix]
-
-* Fri Jan 11 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.1
-- Resolves: rhbz#1665369 libreswan 3.25 in FIPS mode is incorrectly rejecting X.509 public keys that are >= 3072 bits [rhel-7.6.z]
-
-* Tue Jan 08 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4
-- Resolves: rhbz#1660536 libreswan assertion failed when OAKLEY_KEY_LENGTH is zero for IKE using AES_CBC
-- Resolves: rhbz#1660544 config: recursive include check doesn't work
-- Resolves: rhbz#1660542 Libreswan crash upon receiving ISAKMP_NEXT_D with appended ISAKMP_NEXT_N
-- Resolves: rhbz#1664244 [abrt] [faf] libreswan: strncpy(): /usr/libexec/ipsec/pluto killed by 11
-
-* Mon Dec 03 2018 Paul Wouters <pwouters@redhat.com> - 3.25-3
-- Resolves: rhbz#1655440 Unable to verify certificate with non-empty Extended Key Usage which does not include serverAuth or clientAuth
+* Thu Dec 20 2018 Paul Wouters <pwouters@redhat.com> - 3.25-5
+- Resolves: rhbz#1639404 Unable to verify certificate with non-empty Extended Key Usage which does not include serverAuth or clientAuth
+- Resolves: rhbz#1630355 Libreswan crash upon receiving ISAKMP_NEXT_D with appended ISAKMP_NEXT_N
+- Resolves: rhbz#1629902 libreswan assertion failed when OAKLEY_KEY_LENGTH is zero for IKE using AES_CBC
+- Resolves: rhbz#1623279 [abrt] [faf] libreswan: strncpy(): /usr/libexec/ipsec/pluto killed by 11
+- Resolves: rhbz#1625303 config: recursive include check doesn't work
+- Resolves: rhbz#1664521 libreswan 3.25 in FIPS mode is incorrectly rejecting X.509 public keys that are >= 3072 bits
 
 * Mon Jul 02 2018 Paul Wouters <pwouters@redhat.com> - 3.25-2
 - Resolves: rhbz#1597322 Relax deleting IKE SA's and IPsec SA's to avoid interop issues with third party VPN vendors

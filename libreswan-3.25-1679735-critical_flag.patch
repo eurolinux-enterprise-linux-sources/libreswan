@@ -1,6 +1,6 @@
 diff -Naur libreswan-3.25-orig/programs/pluto/nss_cert_verify.c libreswan-3.25/programs/pluto/nss_cert_verify.c
---- libreswan-3.25-orig/programs/pluto/nss_cert_verify.c	2019-04-11 12:50:35.423733161 +0200
-+++ libreswan-3.25/programs/pluto/nss_cert_verify.c	2019-04-11 12:51:58.832735953 +0200
+--- libreswan-3.25-orig/programs/pluto/nss_cert_verify.c	2019-02-23 21:15:03.910589319 -0500
++++ libreswan-3.25/programs/pluto/nss_cert_verify.c	2019-02-23 21:42:05.955565629 -0500
 @@ -121,7 +121,7 @@
  	return FALSE;
  }
@@ -54,15 +54,6 @@ diff -Naur libreswan-3.25-orig/programs/pluto/nss_cert_verify.c libreswan-3.25/p
  	/* kludge alert!!
  	 * verification may be performed twice: once with the
  	 * 'client' usage and once with 'server', which is an NSS
-@@ -332,7 +336,7 @@
- 
- 	for (usage = certificateUsageSSLClient; ; usage = certificateUsageSSLServer) {
- 		SECStatus rv = CERT_PKIXVerifyCert(end_cert, usage, cvin, cvout, NULL);
--		if (rv != SECSuccess || cur_log->count > 0) {
-+		if (rv != SECSuccess) {
- 			if (cur_log->count > 0 && cur_log->head != NULL) {
- 				if (usage == certificateUsageSSLClient &&
- 				    RETRYABLE_TYPE(cur_log->head->error)) {
 @@ -348,7 +352,8 @@
  					cvout[1].value.pointer.chain = NULL;
  					continue;
