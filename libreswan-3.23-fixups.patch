@@ -1,0 +1,507 @@
+diff -Naur libreswan-3.23-orig/programs/pluto/connections.c libreswan-3.23/programs/pluto/connections.c
+--- libreswan-3.23-orig/programs/pluto/connections.c	2018-01-25 15:19:46.000000000 -0500
++++ libreswan-3.23/programs/pluto/connections.c	2018-02-05 14:38:49.372280712 -0500
+@@ -3158,10 +3158,8 @@
+ 					matching_peer_id && matching_peer_ca && matching_requested_ca,
+ 					matching_peer_id, matching_peer_ca, matching_requested_ca);});
+ 
+-			/* Ignore template from which we instantiated - this should never happen */
+ 			if (c->kind == CK_INSTANCE && d->kind == CK_TEMPLATE && streq(c->name, d->name)) {
+-				libreswan_log("Warning: not switching back to template of current instance (FIXME)");
+-				continue;
++				DBG(DBG_CONTROLMORE, DBG_log("template conn fits better than instance of it - different client on same IP/port requires new instance"));
+ 			}
+ 
+ 			/* 'You Tarzan, me Jane' check based on received IDr */
+diff -Naur libreswan-3.23-orig/programs/pluto/hostpair.c libreswan-3.23/programs/pluto/hostpair.c
+--- libreswan-3.23-orig/programs/pluto/hostpair.c	2018-01-25 15:19:46.000000000 -0500
++++ libreswan-3.23/programs/pluto/hostpair.c	2018-02-05 14:38:57.865635032 -0500
+@@ -144,17 +144,6 @@
+ 		hisport = pluto_port;
+ 
+ 	for (prev = NULL, p = host_pairs; p != NULL; prev = p, p = p->next) {
+-		if (p->connections != NULL && (p->connections->kind == CK_INSTANCE) &&
+-				(p->connections->spd.that.id.kind == ID_NULL))
+-		{
+-			DBG(DBG_CONTROLMORE, {
+-				char ci[CONN_INST_BUF];
+-				DBG_log("find_host_pair: ignore CK_INSTANCE with ID_NULL hp:\"%s\"%s",
+-					p->connections->name,
+-					fmt_conn_instance(p->connections, ci));
+-			});
+-			continue;
+-		}
+ 
+ 		DBG(DBG_CONTROLMORE, {
+ 			ipstr_buf b1;
+diff -Naur libreswan-3.23-orig/programs/pluto/ikev2.h libreswan-3.23/programs/pluto/ikev2.h
+--- libreswan-3.23-orig/programs/pluto/ikev2.h	2018-01-25 15:19:46.000000000 -0500
++++ libreswan-3.23/programs/pluto/ikev2.h	2018-02-05 14:39:11.171190105 -0500
+@@ -162,7 +162,9 @@
+ extern bool ikev2_calculate_rsa_sha1(struct state *st,
+ 				     enum original_role role,
+ 				     unsigned char *idhash,
+-				     pb_stream *a_pbs);
++				     pb_stream *a_pbs,
++				     bool calc_no_ppk_auth,
++				     chunk_t *no_ppk_auth);
+ 
+ extern bool ikev2_create_psk_auth(enum keyword_authby authby,
+ 				     struct state *st,
+diff -Naur libreswan-3.23-orig/programs/pluto/ikev2_parent.c libreswan-3.23/programs/pluto/ikev2_parent.c
+--- libreswan-3.23-orig/programs/pluto/ikev2_parent.c	2018-01-25 15:19:46.000000000 -0500
++++ libreswan-3.23/programs/pluto/ikev2_parent.c	2018-02-05 14:39:11.173190188 -0500
+@@ -2783,7 +2783,9 @@
+ 
+ 	switch (a.isaa_type) {
+ 	case IKEv2_AUTH_RSA:
+-		if (!ikev2_calculate_rsa_sha1(pst, role, idhash_out, &a_pbs)) {
++		if (!ikev2_calculate_rsa_sha1(pst, role, idhash_out, &a_pbs,
++			FALSE, /* store-only not set */
++			NULL /* store-only chunk unused */)) {
+ 			loglog(RC_LOG_SERIOUS, "Failed to find our RSA key");
+ 			return STF_FATAL;
+ 		}
+@@ -2792,7 +2794,7 @@
+ 	case IKEv2_AUTH_PSK:
+ 	case IKEv2_AUTH_NULL:
+ 		if (!ikev2_create_psk_auth(authby, pst, idhash_out, &a_pbs,
+-			FALSE /* store-only not set */,
++			FALSE, /* store-only not set */
+ 			NULL /* store-only chunk unused */)) {
+ 			loglog(RC_LOG_SERIOUS, "Failed to find our PreShared Key");
+ 			return STF_FATAL;
+@@ -2812,7 +2814,9 @@
+ 					return STF_INTERNAL_ERROR;
+ 			}
+ 
+-			if (!ikev2_calculate_rsa_sha1(pst, role, idhash_out, &a_pbs)) {
++			if (!ikev2_calculate_rsa_sha1(pst, role, idhash_out, &a_pbs,
++				FALSE, /* store-only not set */
++				NULL /* store-only chunk unused */)) {
+ 				loglog(RC_LOG_SERIOUS, "DigSig: failed to find our RSA key");
+ 				return STF_FATAL;
+ 			}
+@@ -3224,7 +3228,7 @@
+ 		hmac_update(&id_ctx, id_start, id_len);
+ 		hmac_final(idhash, &id_ctx);
+ 
+-		if (pst->st_sk_pi_no_ppk != NULL) {
++		if (pst->st_seen_ppk && !LIN(POLICY_PPK_INSIST, pc->policy)) {
+ 			struct hmac_ctx id_ctx_npa;
+ 
+ 			hmac_init(&id_ctx_npa, pst->st_oakley.ta_prf, pst->st_sk_pi_no_ppk);
+@@ -3371,7 +3375,7 @@
+ 			notifies++;
+ 
+ 		if (pst->st_seen_ppk)
+-			notifies++; /* used for two payloads */
++			notifies++; /* used for one or two payloads */
+ 
+ 		/* code does not support AH + ESP, not recommend rfc8221 section-4 */
+ 		struct ipsec_proto_info *proto_info
+@@ -3437,21 +3441,24 @@
+ 		}
+ 		if (pst->st_seen_ppk) {
+ 			chunk_t notify_data = create_unified_ppk_id(&ppk_id_p);
++			int np = LIN(POLICY_PPK_INSIST, cc->policy) ? ISAKMP_NEXT_v2NONE : ISAKMP_NEXT_v2N;
+ 
+-			notifies--; /* used for 2 payloads */
+-				if (!ship_v2N(ISAKMP_NEXT_v2N, ISAKMP_PAYLOAD_NONCRITICAL,
+-						PROTO_v2_RESERVED, &empty_chunk,
+-						v2N_PPK_IDENTITY, &notify_data,
+-						&e_pbs_cipher))
+-					return STF_INTERNAL_ERROR;
++			notifies--; /* used for one or two payloads */
++			if (!ship_v2N(np, ISAKMP_PAYLOAD_NONCRITICAL,
++					PROTO_v2_RESERVED, &empty_chunk,
++					v2N_PPK_IDENTITY, &notify_data,
++					&e_pbs_cipher))
++				return STF_INTERNAL_ERROR;
+ 			freeanychunk(notify_data);
+ 
+-			ikev2_calc_no_ppk_auth(cc, pst, idhash_npa, &pst->st_no_ppk_auth);
+-			if (!ship_v2N(ISAKMP_NEXT_v2NONE, ISAKMP_PAYLOAD_NONCRITICAL,
+-				PROTO_v2_RESERVED, &empty_chunk,
+-				v2N_NO_PPK_AUTH, &pst->st_no_ppk_auth,
+-				&e_pbs_cipher))
+-					return STF_INTERNAL_ERROR;
++			if (!LIN(POLICY_PPK_INSIST, cc->policy)) {
++				ikev2_calc_no_ppk_auth(cc, pst, idhash_npa, &pst->st_no_ppk_auth);
++				if (!ship_v2N(ISAKMP_NEXT_v2NONE, ISAKMP_PAYLOAD_NONCRITICAL,
++					PROTO_v2_RESERVED, &empty_chunk,
++					v2N_NO_PPK_AUTH, &pst->st_no_ppk_auth,
++					&e_pbs_cipher))
++						return STF_INTERNAL_ERROR;
++			}
+ 		}
+ 
+ 		passert(notifies == 0);
+diff -Naur libreswan-3.23-orig/programs/pluto/ikev2_ppk.c libreswan-3.23/programs/pluto/ikev2_ppk.c
+--- libreswan-3.23-orig/programs/pluto/ikev2_ppk.c	2018-01-25 15:19:46.000000000 -0500
++++ libreswan-3.23/programs/pluto/ikev2_ppk.c	2018-02-05 14:39:11.173190188 -0500
+@@ -113,7 +113,24 @@
+ 	enum keyword_authby authby = c->spd.this.authby;
+ 	switch (authby) {
+ 	case AUTH_RSASIG:
+-		/* TODO */
++		if (ikev2_calculate_rsa_sha1(st, st->st_original_role, id_hash, NULL, TRUE, no_ppk_auth)) {
++			if (st->st_hash_negotiated & NEGOTIATE_AUTH_HASH_SHA1) {
++				/* make blobs separately, and somehow combine them and no_ppk_auth
++				 * to get an actual no_ppk_auth */
++				int len = ASN1_LEN_ALGO_IDENTIFIER + ASN1_SHA1_RSA_OID_SIZE + no_ppk_auth->len;
++				u_char *blobs = alloc_bytes(len, "bytes for blobs for AUTH_DIGSIG NO_PPK_AUTH");
++				u_char *ret = blobs;
++				memcpy(blobs, len_sha1_rsa_oid_blob, ASN1_LEN_ALGO_IDENTIFIER);
++				blobs += ASN1_LEN_ALGO_IDENTIFIER;
++				memcpy(blobs, sha1_rsa_oid_blob, ASN1_SHA1_RSA_OID_SIZE);
++				blobs += ASN1_SHA1_RSA_OID_SIZE;
++				memcpy(blobs, no_ppk_auth->ptr, no_ppk_auth->len);
++				chunk_t release = *no_ppk_auth;
++				setchunk(*no_ppk_auth, ret, len);
++				freeanychunk(release);
++			}
++		}
++		return STF_OK;
+ 		break;
+ 	case AUTH_PSK:
+ 		if (ikev2_create_psk_auth(AUTH_PSK, st, id_hash, NULL, TRUE, no_ppk_auth))
+diff -Naur libreswan-3.23-orig/programs/pluto/ikev2_rsa.c libreswan-3.23/programs/pluto/ikev2_rsa.c
+--- libreswan-3.23-orig/programs/pluto/ikev2_rsa.c	2018-01-25 15:19:46.000000000 -0500
++++ libreswan-3.23/programs/pluto/ikev2_rsa.c	2018-02-05 14:39:11.173190188 -0500
+@@ -101,7 +101,9 @@
+ bool ikev2_calculate_rsa_sha1(struct state *st,
+ 			      enum original_role role,
+ 			      unsigned char *idhash,
+-			      pb_stream *a_pbs)
++			      pb_stream *a_pbs,
++			      bool calc_no_ppk_auth,
++			      chunk_t *no_ppk_auth)
+ {
+ 	unsigned char signed_octets[SHA1_DIGEST_SIZE + 16];
+ 	size_t signed_len;
+@@ -136,8 +138,13 @@
+ 		if (shr == 0)
+ 			return FALSE;
+ 		passert(shr == (int)sz);
+-		if (!out_raw(sig_val, sz, a_pbs, "rsa signature"))
+-			return FALSE;
++		if (calc_no_ppk_auth == FALSE) {
++			if (!out_raw(sig_val, sz, a_pbs, "rsa signature"))
++				return FALSE;
++		} else {
++			clonetochunk(*no_ppk_auth, sig_val, sz, "NO_PPK_AUTH chunk");
++			DBG(DBG_PRIVATE, DBG_dump_chunk("NO_PPK_AUTH payload", *no_ppk_auth));
++		}
+ 	}
+ 
+ 	return TRUE;
+diff -Naur libreswan-3.23-orig/programs/pluto/nss_cert_verify.c libreswan-3.23/programs/pluto/nss_cert_verify.c
+--- libreswan-3.23-orig/programs/pluto/nss_cert_verify.c	2018-01-25 15:19:46.000000000 -0500
++++ libreswan-3.23/programs/pluto/nss_cert_verify.c	2018-02-05 14:38:52.685418927 -0500
+@@ -498,60 +498,83 @@
+ 
+ bool cert_VerifySubjectAltName(const CERTCertificate *cert, const char *name)
+ {
+-	SECStatus rv;
+ 	SECItem	subAltName;
+-	PLArenaPool *arena = NULL;
+-	CERTGeneralName *nameList = NULL;
+-	CERTGeneralName *current = NULL;
+-	bool san_ip = FALSE;
+-	unsigned int len = strlen(name);
+-	ip_address myip;
+-
+-	rv = CERT_FindCertExtension(cert, SEC_OID_X509_SUBJECT_ALT_NAME,
++	SECStatus rv = CERT_FindCertExtension(cert, SEC_OID_X509_SUBJECT_ALT_NAME,
+ 			&subAltName);
+ 	if (rv != SECSuccess) {
+ 		DBG(DBG_X509, DBG_log("certificate contains no subjectAltName extension"));
+ 		return FALSE;
+ 	}
+ 
+-	if (tnatoaddr(name, 0, AF_UNSPEC, &myip) == NULL)
+-		san_ip = TRUE;
++	ip_address myip;
++	bool san_ip = (tnatoaddr(name, 0, AF_UNSPEC, &myip) == NULL);
+ 
+-	arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
++	PLArenaPool *arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
+ 	passert(arena != NULL);
+ 
+-	nameList = current = CERT_DecodeAltNameExtension(arena, &subAltName);
+-	passert(current != NULL);
++	CERTGeneralName *nameList = CERT_DecodeAltNameExtension(arena, &subAltName);
+ 
+-	do
+-	{
++	if (nameList == NULL) {
++		loglog(RC_LOG_SERIOUS, "certificate subjectAltName extension failed to decode");
++		PORT_FreeArena(arena, PR_FALSE);
++		return FALSE;
++	}
++
++	/*
++	 * nameList is a pointer into a non-empty circular linked list.
++	 * This loop visits each entry.
++	 * We have visited each when we come back to the start.
++	 * We test only at the end, after we advance, because we want to visit
++	 * the first entry the first time we see it but stop when we get to it
++	 * the second time.
++	 */
++	CERTGeneralName *current = nameList;
++	do {
+ 		switch (current->type) {
+ 		case certDNSName:
+ 		case certRFC822Name:
+-			if (san_ip)
+-				break;
+-			if (current->name.other.len == len) {
+-				if (memcmp(current->name.other.data, name, len) == 0) {
+-					DBG(DBG_X509, DBG_log("subjectAltname %s found in certificate", name));
+-					PORT_FreeArena(arena, PR_FALSE);
+-					return TRUE;
+-				}
+-			}
++		{
++			/*
++			 * Match the parameter name with the name in the certificate.
++			 * The name in the cert may start with "*."; that will match
++			 * any initial component in name (up to the first '.').
++			 */
++			/* we need to cast because name.other.data is unsigned char * */
++			const char *c_ptr = (const void *) current->name.other.data;
++			size_t c_len =  current->name.other.len;
++
++			const char *n_ptr = name;
++			static const char wild[] = "*.";
++			const size_t wild_len = sizeof(wild) - 1;
++
++			if (c_len > wild_len && startswith(c_ptr, wild)) {
++				/* wildcard in cert: ignore first component of name */
++				c_ptr += wild_len;
++				c_len -= wild_len;
++				n_ptr = strchr(n_ptr, '.');
++				if (n_ptr == NULL)
++					break;	/* cannot match */
+ 
+-			if (current->name.other.len != 0 && current->name.other.len < IDTOA_BUF) {
+-				char osan[IDTOA_BUF];
++				n_ptr++;	/* skip . */
++			}
+ 
+-				memcpy(osan,current->name.other.data, current->name.other.len);
+-				osan[current->name.other.len] = '\0';
+-				DBG(DBG_X509, DBG_log("subjectAltname (len=%d) %s not match %s", current->name.other.len, osan, name));
+-			} else {
+-				DBG(DBG_X509, DBG_log("subjectAltname <TOO BIG TO PRINT> does not match %s", name));
++			if (c_len == strlen(n_ptr) && strncaseeq(n_ptr, c_ptr, c_len)) {
++				/*
++				 * ??? if current->name.other.data contains bad characters,
++				 * what prevents them being logged?
++				 */
++				DBG(DBG_X509, DBG_log("subjectAltname %s matched %*s in certificate",
++					name, current->name.other.len, current->name.other.data));
++				PORT_FreeArena(arena, PR_FALSE);
++				return TRUE;
+ 			}
+ 			break;
++		}
+ 
+ 		case certIPAddress:
+ 			if (!san_ip)
+ 				break;
++
+ 			if ((current->name.other.len == 4) && (addrtypeof(&myip) == AF_INET)) {
+ 				if (memcmp(current->name.other.data, &myip.u.v4.sin_addr.s_addr, 4) == 0) {
+ 					DBG(DBG_X509, DBG_log("subjectAltname IPv4 matches %s", name));
+@@ -572,7 +595,7 @@
+ 					break;
+ 				}
+ 			}
+-			DBG(DBG_X509, DBG_log("subjectAltnamea IP address family mismatch for %s", name));
++			DBG(DBG_X509, DBG_log("subjectAltname IP address family mismatch for %s", name));
+ 			break;
+ 
+ 		default:
+diff -Naur libreswan-3.23-orig/programs/_unbound-hook/_unbound-hook.in libreswan-3.23/programs/_unbound-hook/_unbound-hook.in
+--- libreswan-3.23-orig/programs/_unbound-hook/_unbound-hook.in	2018-01-25 15:19:46.000000000 -0500
++++ libreswan-3.23/programs/_unbound-hook/_unbound-hook.in	2018-02-05 14:38:49.373280754 -0500
+@@ -1,31 +1,52 @@
+ #!/usr/bin/python
++#
++# Copyright (C) 2018 Paul Wouters <pwouters@redhat.com>
++#
++# This program is free software; you can redistribute it and/or modify it
++# under the terms of the GNU General Public License as published by the
++# Free Software Foundation; either version 2 of the License, or (at your
++# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
++#
++# This program is distributed in the hope that it will be useful, but
++# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++# for more details.
+ 
+ import sys
+-import base64
+-import commands
++import subprocess
+ 
+-log = ""
+-
+-status, myip = commands.getstatusoutput("ip -o route get 1.0.0.1")
++# Get my %defaultroute IP address
++myip = subprocess.check_output("ip -o route get 8.8.8.8", shell=True)
+ myip = myip.split("src")[1].strip().split()[0]
+ 
+ argv = sys.argv
+-argc = len(sys.argv)
++ourself = argv.pop(0)
+ 
+-#log += "Number or arguments is %d\n"%argc
+-#if argc >= 4:
+-#	log += "QNAME:%s\n"%argv[1]
+-#	log += "TTL:%s\n"%argv[2]
+-#	log += "IP:%s\n"%argv[3]
+-#	log += "IPSECKEY:%s\n"%argv[4]
+-#	rr = argv[4]
+-#	pref, gwtype, algo, gw, pubkey = rr.split(" ")
+-#log += "-----------------------------\n"
+-
+-cmdname = "@IPSEC_EXECDIR@/whack --keyid @%s --addkey --pubkeyrsa 0s%s"%(argv[1], pubkey)
+-cmdip = "@IPSEC_EXECDIR@/whack --keyid %s --addkey --pubkeyrsa 0s%s"%(argv[3], pubkey)
+-cmdoe = "@IPSEC_EXECDIR@/whack --oppohere %s --oppothere %s"%(myip, argv[3])
+-ret, output = commands.getstatusoutput(cmdname)
+-ret, output = commands.getstatusoutput(cmdip)
+-ret, output = commands.getstatusoutput(cmdoe)
+-ret, output = commands.getstatusoutput("@IPSEC_EXECDIR@ whack --trafficstatus")
++try:
++    qname = argv.pop(0)
++    ttl = argv.pop(0)
++    ip = argv.pop(0)
++except:
++    sys.exit("Bad arguments to ipsec _unbound")
++
++while (argv != []):
++    try:
++        gwprec = argv.pop(0)
++        gwtype = argv.pop(0)
++        gwalg = argv.pop(0)
++        gwid = argv.pop(0)
++        pubkey = argv.pop(0)
++        addkeyip = "ipsec whack --keyid @%s --addkey --pubkeyrsa 0s%s"%(ip, pubkey)
++        addkeyhostname = "ipsec whack --keyid @%s --addkey --pubkeyrsa 0s%s"%(qname, pubkey)
++        print("processing an IPSECKEY record for Opportunistic IPsec to %s(%s)"%(qname,ip))
++        print(subprocess.call(addkeyip, shell=True))
++        print(subprocess.call(addkeyhostname, shell=True))
++    except:
++        sys.exit("failed to process an IPSECKEY record for Opportunistic IPsec to %s(%s)"%(qname,ip))
++
++# done injecting all IPSECKEY records into pluto - try actual OE now
++cmdoeip = "ipsec whack --oppohere %s --oppothere %s"%(myip, ip)
++print(subprocess.check_output(cmdoeip, shell=True))
++#cmdoeqname = "ipsec whack --oppohere %s --oppothere %s"%(myip, qname)
++#ret, output = commands.getstatusoutput(cmdoeqname)
++print(subprocess.check_output("ipsec whack --trafficstatus", shell=True))
+diff --git a/include/ietf_constants.h b/include/ietf_constants.h
+index 8a1ba5d..38fa4de 100644
+--- a/include/ietf_constants.h
++++ b/include/ietf_constants.h
+@@ -1215,7 +1215,7 @@ enum ikev2_cp_attribute_type {
+ 	IKEv2_EXTERNAL_SOURCE_IP4_NAT_INFO = 23,
+ 	IKEv2_TIMEOUT_PERIOD_FOR_LIVENESS_CHECK = 24,
+ 	IKEv2_INTERNAL_DNS_DOMAIN = 25,
+-	/* IKEv2_INTERNAL_DNSSEC_TA = 26 expected */
++	IKEv2_INTERNAL_DNSSEC_TA = 26
+ };
+ 
+ 
+diff --git a/lib/libswan/constants.c b/lib/libswan/constants.c
+index 9ea9872..ab6db3e 100644
+--- a/lib/libswan/constants.c
++++ b/lib/libswan/constants.c
+@@ -1365,13 +1365,12 @@ static const char *const ikev2_cp_attribute_type_name[] = {
+ 	"IKEv2_EXTERNAL_SOURCE_IP4_NAT_INFO", /* 3gpp */
+ 	"IKEv2_TIMEOUT_PERIOD_FOR_LIVENESS_CHECK", /* 3gpp */
+ 	"IKEv2_INTERNAL_DNS_DOMAIN", /* draft-ietf-ipsecme-split-dns */
+-	/* "IKEv2_INTERNAL_DNSSEC_TA", draft-ietf-ipsecme-split-dns, no Code Point yet */
++	"IKEv2_INTERNAL_DNSSEC_TA", /* draft-ietf-ipsecme-split-dns */
+ };
+ 
+ enum_names ikev2_cp_attribute_type_names = {
+ 	IKEv2_CP_ATTR_RESERVED,
+-	IKEv2_INTERNAL_DNS_DOMAIN,
+-	/* IKEv2_INTERNAL_DNSSEC_TA, */
++	IKEv2_INTERNAL_DNSSEC_TA,
+ 	ARRAY_REF(ikev2_cp_attribute_type_name),
+ 	NULL, /* prefix */
+ 	NULL
+diff --git a/programs/addconn/addconn.c b/programs/addconn/addconn.c
+index ae56972..e818e0e 100644
+--- a/programs/addconn/addconn.c
++++ b/programs/addconn/addconn.c
+@@ -416,12 +416,11 @@ int main(int argc, char *argv[])
+ 		if (verbose)
+ 			printf("  Pass #1: Loading auto=add, auto=route and auto=start connections\n");
+ 
+-		for (conn = cfg->conns.tqh_first;
+-			conn != NULL;
+-			conn = conn->link.tqe_next) {
++		for (conn = cfg->conns.tqh_first; conn != NULL; conn = conn->link.tqe_next) {
+ 			if (conn->desired_state == STARTUP_ADD ||
+ 				conn->desired_state == STARTUP_ONDEMAND ||
+-				conn->desired_state == STARTUP_START) {
++				conn->desired_state == STARTUP_START)
++			{
+ 				if (verbose)
+ 					printf(" %s", conn->name);
+ 				resolve_defaultroute(conn);
+@@ -436,30 +435,22 @@ int main(int argc, char *argv[])
+ 		starter_whack_listen(cfg);
+ 
+ 		if (verbose)
+-			printf("  Pass #2: Routing auto=route and auto=start connections\n");
++			printf("  Pass #2: Routing auto=route connections\n");
+ 
+-		for (conn = cfg->conns.tqh_first;
+-			conn != NULL;
+-			conn = conn->link.tqe_next) {
+-			if (conn->desired_state == STARTUP_ADD ||
+-				conn->desired_state == STARTUP_ONDEMAND ||
+-				conn->desired_state == STARTUP_START) {
++		for (conn = cfg->conns.tqh_first; conn != NULL; conn = conn->link.tqe_next) {
++			if (conn->desired_state == STARTUP_ONDEMAND)
++			{
+ 				if (verbose)
+ 					printf(" %s", conn->name);
+-				resolve_defaultroute(conn);
+-				if (conn->desired_state == STARTUP_ONDEMAND ||
+-				    conn->desired_state == STARTUP_START) {
++				if (conn->desired_state == STARTUP_ONDEMAND)
+ 					starter_whack_route_conn(cfg, conn);
+-				}
+ 			}
+ 		}
+ 
+ 		if (verbose)
+ 			printf("  Pass #3: Initiating auto=start connections\n");
+ 
+-		for (conn = cfg->conns.tqh_first;
+-			conn != NULL;
+-			conn = conn->link.tqe_next) {
++		for (conn = cfg->conns.tqh_first; conn != NULL; conn = conn->link.tqe_next) {
+ 			if (conn->desired_state == STARTUP_START) {
+ 				if (verbose)
+ 					printf(" %s", conn->name);
+diff --git a/programs/_updown.netkey/_updown.netkey.in b/programs/_updown.netkey/_updown.netkey.in
+index 64b2808..b343445 100644
+--- a/programs/_updown.netkey/_updown.netkey.in
++++ b/programs/_updown.netkey/_updown.netkey.in
+@@ -745,6 +745,7 @@ case "${PLUTO_VERB}" in
+     up-client)
+ 	# connection to my client subnet coming up
+ 	# If you are doing a custom version, firewall commands go here.
++	addvtiiface
+ 	updateresolvconf
+ 	addcat
+ 	addsource
