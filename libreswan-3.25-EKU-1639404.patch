@@ -1,0 +1,108 @@
+diff --git a/lib/libswan/Makefile b/lib/libswan/Makefile
+index 510148ad1..0f5c26228 100644
+--- a/lib/libswan/Makefile
++++ b/lib/libswan/Makefile
+@@ -200,10 +200,6 @@ CFLAGS+=-I${LIBRESWANSRCDIR}/include ${PORTINCLUDE}
+ CFLAGS+=$(USERLAND_CFLAGS)
+ CFLAGS+=${CROSSFLAGS}
+ 
+-ifeq ($(NSS_REQ_AVA_COPY),true)
+-CFLAGS+=-DNSS_REQ_AVA_COPY
+-endif
+-
+ OBJS += $(abs_builddir)/version.o
+ 
+ include $(top_srcdir)/mk/library.mk
+diff --git a/mk/config.mk b/mk/config.mk
+index 3f2bd55c1..fcdabd1fb 100644
+--- a/mk/config.mk
++++ b/mk/config.mk
+@@ -242,6 +242,17 @@ NSPR_LDFLAGS ?= -lnspr4
+ # Use nss copy for CERT_CompareAVA
+ # See https://bugzilla.mozilla.org/show_bug.cgi?id=1336487
+ NSS_REQ_AVA_COPY?=true
++ifeq ($(NSS_REQ_AVA_COPY),true)
++NSSFLAGS+=-DNSS_REQ_AVA_COPY
++endif
++
++# Use nss IPsec profile for X509 validation. This is less restrictive
++# ok EKU's. This is not yet in upstream nss.
++# See https://bugzilla.mozilla.org/show_bug.cgi?id=1252891
++NSS_HAS_IPSEC_PROFILE?=false
++ifeq ($(NSS_HAS_IPSEC_PROFILE),true)
++NSSFLAGS+=-DNSS_IPSEC_PROFILE
++endif
+ 
+ # Use a local copy of xfrm.h. This can be needed on older systems
+ # that do not ship linux/xfrm.h, or when the shipped version is too
+diff --git a/programs/pluto/nss_cert_verify.c b/programs/pluto/nss_cert_verify.c
+index 95c637f53..7d458ac2a 100644
+--- a/programs/pluto/nss_cert_verify.c
++++ b/programs/pluto/nss_cert_verify.c
+@@ -299,6 +299,28 @@ static int vfy_chain_pkix(CERTCertificate **chain, int chain_len,
+ 	cvout[1].value.pointer.chain = NULL;
+ 	cvout[2].type = cert_po_end;
+ 
++	int fin;
++
++#ifdef NSS_IPSEC_PROFILE
++	SECStatus rv = CERT_PKIXVerifyCert(end_cert, certificateUsageIPsec,
++						cvin, cvout, NULL);
++	if (rv != SECSuccess || cur_log->count > 0) {
++		if (cur_log->count > 0 && cur_log->head != NULL) {
++			fin = nss_err_to_revfail(cur_log->head);
++		} else {
++			/*
++			 * An rv != SECSuccess without CERTVerifyLog
++			 * results should not * happen, but catch it anyway
++			 */
++			loglog(RC_LOG_SERIOUS, "X509: unspecified NSS verification failure");
++			fin = VERIFY_RET_FAIL;
++		}
++	} else {
++		DBG(DBG_X509, DBG_log("certificate is valid"));
++		*end_out = end_cert;
++		fin = VERIFY_RET_OK;
++	}
++#else
+ 	/* kludge alert!!
+ 	 * verification may be performed twice: once with the
+ 	 * 'client' usage and once with 'server', which is an NSS
+@@ -307,12 +329,10 @@ static int vfy_chain_pkix(CERTCertificate **chain, int chain_len,
+ 	 * KU/EKU combinations
+ 	 */
+ 
+-	int fin;
+ 	SECCertificateUsage usage;
+ 
+ 	for (usage = certificateUsageSSLClient; ; usage = certificateUsageSSLServer) {
+ 		SECStatus rv = CERT_PKIXVerifyCert(end_cert, usage, cvin, cvout, NULL);
+-
+ 		if (rv != SECSuccess || cur_log->count > 0) {
+ 			if (cur_log->count > 0 && cur_log->head != NULL) {
+ 				if (usage == certificateUsageSSLClient &&
+@@ -346,6 +366,7 @@ static int vfy_chain_pkix(CERTCertificate **chain, int chain_len,
+ 		}
+ 		break;
+ 	}
++#endif
+ 	pexpect(fin != 0);
+ 
+ 	CERT_DestroyCertList(trustcl);
+diff --git a/programs/pluto/plutomain.c b/programs/pluto/plutomain.c
+index 50582822d..007d73f45 100644
+--- a/programs/pluto/plutomain.c
++++ b/programs/pluto/plutomain.c
+@@ -180,6 +180,12 @@ static const char compile_time_interop_options[] = ""
+ 	" BROKEN_POPEN"
+ #endif
+ 	" NSS"
++#ifdef NSS_REQ_AVA_COPY
++	" (AVA copy)"
++#endif
++#ifdef NSS_IPSEC_PROFILE
++	" (IPsec profile)"
++#endif
+ #ifdef USE_DNSSEC
+ 	" DNSSEC"
+ #endif

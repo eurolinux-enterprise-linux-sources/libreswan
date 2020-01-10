@@ -1,0 +1,19 @@
+commit b257545675ae4564d866758eb3ef4230d7c1ede2
+Author: D. Hugh Redelmeier <hugh@mimosa.com>
+Date:   Tue Sep 25 17:14:36 2018 -0400
+
+    libipsecconf: fix off-by-one in config file "include" handling
+
+diff --git a/lib/libipsecconf/parser.l b/lib/libipsecconf/parser.l
+index cc2faf5c9..aad2fc9b2 100644
+--- a/lib/libipsecconf/parser.l
++++ b/lib/libipsecconf/parser.l
+@@ -260,7 +260,7 @@ int parser_y_include (const char *filename)
+ 	case 0:
+ 		/* success */
+ 
+-		if (ic_private.stack_ptr >= MAX_INCLUDE_DEPTH) {
++		if (ic_private.stack_ptr >= MAX_INCLUDE_DEPTH - 1) {
+ 			yyerror("max inclusion depth reached");
+ 			return 1;
+ 		}

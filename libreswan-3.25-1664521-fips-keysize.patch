@@ -1,0 +1,35 @@
+diff --git a/programs/pluto/connections.c b/programs/pluto/connections.c
+index 45e5bee1f..db1ac5303 100644
+--- a/programs/pluto/connections.c
++++ b/programs/pluto/connections.c
+@@ -846,9 +846,10 @@ static void load_end_nss_certificate(const char *which, CERTCertificate *cert,
+ 	if (libreswan_fipsmode()) {
+ 		SECKEYPublicKey *pk = CERT_ExtractPublicKey(cert);
+ 		passert(pk != NULL);
+-		if (pk->u.rsa.modulus.len < FIPS_MIN_RSA_KEY_SIZE) {
++		if (pk->u.rsa.modulus.len * BITS_PER_BYTE < FIPS_MIN_RSA_KEY_SIZE) {
+ 			whack_log(RC_FATAL,
+-				"FIPS: Rejecting cert with key size under %d",
++				"FIPS: Rejecting cert with key size %d which is under %d",
++				pk->u.rsa.modulus.len * BITS_PER_BYTE,
+ 				FIPS_MIN_RSA_KEY_SIZE);
+ 			SECKEY_DestroyPublicKey(pk);
+ 			return;
+diff --git a/programs/pluto/nss_cert_verify.c b/programs/pluto/nss_cert_verify.c
+index b4de167bb..9b031354b 100644
+--- a/programs/pluto/nss_cert_verify.c
++++ b/programs/pluto/nss_cert_verify.c
+@@ -460,9 +460,10 @@ static bool import_der_cert(CERTCertDBHandle *handle,
+ 	if (libreswan_fipsmode()) {
+ 		SECKEYPublicKey *pk = CERT_ExtractPublicKey(cert);
+ 		passert(pk != NULL);
+-		if (pk->u.rsa.modulus.len < FIPS_MIN_RSA_KEY_SIZE) {
+-			libreswan_log("FIPS: Rejecting cert with key size under %d",
+-				      FIPS_MIN_RSA_KEY_SIZE);
++		if ((pk->u.rsa.modulus.len * BITS_PER_BYTE) < FIPS_MIN_RSA_KEY_SIZE) {
++			libreswan_log("FIPS: Rejecting peer cert with key size %d under %d",
++					pk->u.rsa.modulus.len * BITS_PER_BYTE,
++					FIPS_MIN_RSA_KEY_SIZE);
+ 			SECKEY_DestroyPublicKey(pk);
+ 			/*
+ 			 * XXX: Since the certificate isn't added to

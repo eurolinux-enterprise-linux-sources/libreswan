@@ -1,0 +1,18 @@
+diff -Naur libreswan-3.25-orig/programs/pluto/ikev1_spdb_struct.c libreswan-3.25/programs/pluto/ikev1_spdb_struct.c
+--- libreswan-3.25-orig/programs/pluto/ikev1_spdb_struct.c	2018-06-27 22:42:26.000000000 +0700
++++ libreswan-3.25/programs/pluto/ikev1_spdb_struct.c	2018-11-22 20:29:34.034626926 +0700
+@@ -1053,10 +1053,11 @@
+ 				loglog(RC_LOG_SERIOUS,
+ 				       "You should NOT use insecure/broken IKE algorithms (%s)!",
+ 				       ta->ta_encrypt->common.fqn);
++			} else {
++				DBG(DBG_CONTROL,
++					DBG_log("OAKLEY proposal verified; matching alg_info found"));
++				return true;
+ 			}
+-			DBG(DBG_CONTROL,
+-			    DBG_log("OAKLEY proposal verified; matching alg_info found"));
+-			return true;
+ 		}
+ 	}
+ 	libreswan_log("Oakley Transform [%s (%d), %s, %s] refused%s",

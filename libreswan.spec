@@ -13,7 +13,7 @@
 %global USE_NM true
 %global USE_LINUX_AUDIT true
 %global USE_SECCOMP true
-
+%global NSS_HAS_IPSEC_PROFILE true
 
 %if 0%{?fedora}
 %global rhel 7
@@ -24,7 +24,7 @@
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
 Version: 3.25
-Release: %{?prever:0.}2%{?prever:.%{prever}}%{?dist}
+Release: %{?prever:0.}4.1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Group: System Environment/Daemons
 Url: https://libreswan.org/
@@ -35,14 +35,23 @@ Source3: ikev2.fax.bz2
 
 Patch1: libreswan-3.25-alg_info.patch
 Patch2: libreswan-3.25-relax-delete.patch
+Patch3: libreswan-3.25-EKU-1639404.patch
+Patch4: libreswan-3.23-zerolengthkey.patch
+Patch5: libreswan-3.25-1625303-recursive-incl.patch
+Patch6: libreswan-3.23-del-with-notify-1630355.patch
+Patch7: libreswan-3.25-1664244-xauth-null-pwd.patch
+Patch8: libreswan-3.25-1664521-fips-keysize.patch
 
 Requires: iproute >= 2.6.8
 Requires: nss-tools nss-softokn
 
 BuildRequires: bison flex redhat-rpm-config pkgconfig
-BuildRequires: nss-devel >= 3.16.1 nspr-devel
+BuildRequires: nspr-devel
 BuildRequires: pam-devel
 BuildRequires: xmlto
+# minimum nss version for IPsec profile support, see rhbz#1212132
+Requires: nss >= 3.36.0-7.1
+BuildRequires: nss-devel >= 3.36.0-7.1
 
 %if %{?rhel} <= 6
 BuildRequires: libevent2-devel net-tools
@@ -123,6 +132,12 @@ Libreswan is based on Openswan-2.6.38 which in turn is based on FreeS/WAN-2.04
 %setup -q -n libreswan-%{version}%{?prever}
 %patch1 -p1
 %patch2 -p1
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
+%patch6 -p1
+%patch7 -p1
+%patch8 -p1
 
 %build
 %if %{buildefence}
@@ -162,6 +177,7 @@ make %{?_smp_mflags} \
 %endif
   USE_DNSSEC="%{USE_DNSSEC}" \
   USE_SECCOMP="%{USE_SECCOMP}" \
+  NSS_HAS_IPSEC_PROFILE="%{NSS_HAS_IPSEC_PROFILE}" \
   USE_DH22=true \
   programs
 FS=$(pwd)
@@ -215,6 +231,7 @@ make \
 %endif
   USE_DNSSEC="%{USE_DNSSEC}" \
   USE_SECCOMP="%{USE_SECCOMP}" \
+  NSS_HAS_IPSEC_PROFILE="%{NSS_HAS_IPSEC_PROFILE}" \
   USE_DH22=true \
   install
 FS=$(pwd)
@@ -324,6 +341,18 @@ fi
 %endif
 
 %changelog
+* Fri Jan 11 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4.1
+- Resolves: rhbz#1665369 libreswan 3.25 in FIPS mode is incorrectly rejecting X.509 public keys that are >= 3072 bits [rhel-7.6.z]
+
+* Tue Jan 08 2019 Paul Wouters <pwouters@redhat.com> - 3.25-4
+- Resolves: rhbz#1660536 libreswan assertion failed when OAKLEY_KEY_LENGTH is zero for IKE using AES_CBC
+- Resolves: rhbz#1660544 config: recursive include check doesn't work
+- Resolves: rhbz#1660542 Libreswan crash upon receiving ISAKMP_NEXT_D with appended ISAKMP_NEXT_N
+- Resolves: rhbz#1664244 [abrt] [faf] libreswan: strncpy(): /usr/libexec/ipsec/pluto killed by 11
+
+* Mon Dec 03 2018 Paul Wouters <pwouters@redhat.com> - 3.25-3
+- Resolves: rhbz#1655440 Unable to verify certificate with non-empty Extended Key Usage which does not include serverAuth or clientAuth
+
 * Mon Jul 02 2018 Paul Wouters <pwouters@redhat.com> - 3.25-2
 - Resolves: rhbz#1597322 Relax deleting IKE SA's and IPsec SA's to avoid interop issues with third party VPN vendors
 
